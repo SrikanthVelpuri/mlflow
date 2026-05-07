@@ -166,6 +166,41 @@ Critically, **every LLM call inside an eval is itself traced**. The judge’s LL
 
 ## 7. Putting it all together — a single agent invocation
 
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Client as Client
+    participant Server as Pyfunc scoring server
+    participant Wrap as _ChatModelPyfuncWrapper
+    participant Agent as ChatModel.predict
+    participant LLM as OpenAI / Anthropic SDK
+    participant Tool as Tool function
+    participant TM as TraceManager
+    participant Exp as Exporter (MLflow / OTel / inference table)
+
+    Client->>Server: POST /invocations  {messages, params}
+    Server->>Wrap: validate signature, coerce types
+    Wrap->>TM: open AGENT span
+    Wrap->>Agent: predict(context, messages, params)
+    Agent->>LLM: chat.completions.create(...)
+    LLM->>TM: open LLM span (auto-tracing)
+    LLM-->>Agent: assistant message + tool_calls
+    LLM->>TM: close LLM span (record tokens, output)
+    Agent->>Tool: dispatch tool call
+    Tool->>TM: open TOOL span (@mlflow.trace)
+    Tool-->>Agent: tool result
+    Tool->>TM: close TOOL span
+    Agent->>LLM: follow-up call with tool result
+    LLM->>TM: open LLM span
+    LLM-->>Agent: final assistant message
+    LLM->>TM: close LLM span
+    Agent-->>Wrap: ChatCompletionResponse
+    Wrap->>TM: close AGENT span (finalise trace)
+    TM->>Exp: ship Trace (TraceInfo + spans)
+    Wrap-->>Server: serialise response
+    Server-->>Client: 200  {choices, usage, …}
+```
+
 When a user calls a deployed `ChatModel` agent, here is what happens across the platform:
 
 1. The gateway / serving endpoint receives `POST /invocations` with a chat payload.

@@ -25,27 +25,35 @@ Two halves:
 - **Server** (`mlflow/gateway/`) — a FastAPI app that ingests a YAML config of *routes*, each route declaring a logical endpoint name + a backend provider with its credentials.
 - **Client** (`mlflow/deployments/mlflow/`) — a deployment plugin (`get_deploy_client("mlflow:<gateway_url>")`) that talks to the gateway using the same `BaseDeploymentClient` interface used everywhere else.
 
-```
-┌─────────────────┐  POST /endpoints/my-chat/invocations  ┌────────────────────┐
-│   Application   │  ─────────────────────────────────▶  │  MLflow Gateway    │
-│  (mlflow.deploy │                                       │   (FastAPI app)    │
-│   .get_deploy_  │  {"messages":[...]}                   │                    │
-│   client(...))  │  ◀─── ChatCompletionResponse ────     │  ┌──────────────┐  │
-└─────────────────┘                                       │  │  Route:      │  │
-                                                          │  │  my-chat     │  │
-                                                          │  │  → openai    │  │
-                                                          │  └──────────────┘  │
-                                                          │  ┌──────────────┐  │
-                                                          │  │  Route:      │  │
-                                                          │  │  my-embed    │  │
-                                                          │  │  → cohere    │  │
-                                                          │  └──────────────┘  │
-                                                          └─────────┬──────────┘
-                                                                    │
-                                  ┌────────────┬────────────┬───────┴───────┬────────┐
-                                  │            │            │               │        │
-                                  ▼            ▼            ▼               ▼        ▼
-                                OpenAI    Anthropic     Cohere          Bedrock    Azure
+```mermaid
+flowchart LR
+    classDef app fill:#e3f2fd,stroke:#1976d2,color:#0d47a1;
+    classDef gw fill:#fff3e0,stroke:#f57c00,color:#e65100;
+    classDef provider fill:#f3e5f5,stroke:#7b1fa2,color:#4a148c;
+
+    App[Application<br/>mlflow.deployments<br/>.get_deploy_client]:::app
+
+    subgraph GW[MLflow Gateway · FastAPI]
+        direction TB
+        R1[Route: my-chat<br/>llm/v1/chat → openai]:::gw
+        R2[Route: my-embed<br/>llm/v1/embeddings → cohere]:::gw
+        R3[Route: my-completion<br/>llm/v1/completions → anthropic]:::gw
+    end
+
+    OpenAI[OpenAI]:::provider
+    Anthropic[Anthropic]:::provider
+    Cohere[Cohere]:::provider
+    Bedrock[Bedrock]:::provider
+    Azure[Azure OpenAI]:::provider
+
+    App -- "POST /endpoints/my-chat/invocations" --> GW
+    GW -- "ChatCompletionResponse" --> App
+
+    R1 --> OpenAI
+    R2 --> Cohere
+    R3 --> Anthropic
+    GW -. "additional providers" .-> Bedrock
+    GW -. "additional providers" .-> Azure
 ```
 
 ## 3. Routes — the configuration unit

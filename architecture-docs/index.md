@@ -11,6 +11,51 @@ This site is an architectural walkthrough of the two platforms that live inside 
 
 It is written for engineers who want to understand *how the pieces fit together* before reading source. Every section links to the concrete file paths and key class definitions in the repo, so you can jump from architecture into code.
 
+## Platform map at a glance
+
+```mermaid
+flowchart TB
+    classDef ml fill:#e3f2fd,stroke:#1976d2,color:#0d47a1;
+    classDef ai fill:#fff3e0,stroke:#f57c00,color:#e65100;
+    classDef shared fill:#f3e5f5,stroke:#7b1fa2,color:#4a148c;
+    classDef store fill:#e8f5e9,stroke:#388e3c,color:#1b5e20;
+
+    subgraph AIP[AI / GenAI Platform]
+        direction LR
+        Tracing[Tracing<br/>Spans + TraceManager]:::ai
+        AutoTrace[Auto-Tracing<br/>OpenAI, Anthropic, LangChain, …]:::ai
+        ChatModel[ChatModel + ChatAgent<br/>typed agent runtime]:::ai
+        Gateway[AI Gateway<br/>unified LLM endpoints]:::ai
+        Eval[GenAI Evaluation<br/>judges + assessments]:::ai
+    end
+
+    subgraph MLP[Traditional ML Platform]
+        direction LR
+        Tracking[Tracking<br/>runs, metrics, params]:::ml
+        Models[Models &amp; Flavors<br/>MLmodel + 28+ adapters]:::ml
+        Registry[Model Registry<br/>versions, aliases]:::ml
+        Projects[Projects<br/>MLproject runner]:::ml
+        Serving[Serving<br/>pyfunc scoring server]:::ml
+    end
+
+    subgraph SHARED[Shared infrastructure]
+        direction LR
+        REST[REST API<br/>server/handlers.py]:::shared
+        Pyfunc[pyfunc runtime<br/>PythonModel / ChatModel]:::shared
+        Deploy[Deployments<br/>plugin interface]:::shared
+    end
+
+    subgraph BACKENDS[Pluggable backends]
+        direction LR
+        Stores[(Tracking / Registry stores<br/>File · SQL · REST · UC)]:::store
+        Artifacts[(Artifact repositories<br/>S3 · GCS · Azure · DBFS · …)]:::store
+    end
+
+    AIP --> SHARED
+    MLP --> SHARED
+    SHARED --> BACKENDS
+```
+
 ## How to read this site
 
 - Start with **[ML Platform](ml-platform.html)** if you are coming from a classical ML background (sklearn, XGBoost, PyTorch).
