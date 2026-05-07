@@ -1,0 +1,10 @@
+source "https://rubygems.org"
+
+# Build the architecture docs site as GitHub Pages would. Pinning to the
+# github-pages metagem keeps local builds in sync with what GH Pages renders.
+gem "github-pages", group: :jekyll_plugins
+gem "webrick"
+
+group :jekyll_plugins do
+  gem "jekyll-relative-links"
+end
