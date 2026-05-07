@@ -5,10 +5,11 @@
  * annotations are already looking good, please remove this comment.
  */
 
+import { describe, jest, test, expect } from '@jest/globals';
 import React from 'react';
 import { EditableTagsTableView } from './EditableTagsTableView';
 import { renderWithIntl, screen } from '@mlflow/mlflow/src/common/utils/TestUtils.react18';
-import userEvent from '@testing-library/user-event-14';
+import userEvent from '@testing-library/user-event';
 import { BrowserRouter } from '../utils/RoutingUtils';
 import { DesignSystemProvider } from '@databricks/design-system';
 
@@ -22,7 +23,6 @@ describe('unit tests', () => {
       tag1: { key: 'tag1', value: 'value1' },
       tag2: { key: 'tag2', value: 'value2' },
     },
-    // eslint-disable-next-line no-unused-vars
     form: { getFieldDecorator: jest.fn((opts) => (c: any) => c) },
     handleAddTag: () => {},
     handleSaveEdit: () => {},

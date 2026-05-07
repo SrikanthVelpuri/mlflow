@@ -1,19 +1,19 @@
 import { Button } from '@databricks/design-system';
-import { Theme } from '@emotion/react';
+import type { Theme } from '@emotion/react';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { FormattedMessage } from 'react-intl';
 import { useNavigate } from '../../../../../common/utils/RoutingUtils';
-import { LegacyTooltip } from '@databricks/design-system';
+import { Tooltip } from '@databricks/design-system';
 import { LIFECYCLE_FILTER } from '../../../../constants';
 import Routes from '../../../../routes';
-import { ExperimentPageViewState } from '../../models/ExperimentPageViewState';
-import { ExperimentRunsSelectorResult } from '../../utils/experimentRuns.selector';
+import type { ExperimentPageViewState } from '../../models/ExperimentPageViewState';
+import type { ExperimentRunsSelectorResult } from '../../utils/experimentRuns.selector';
 import { ExperimentViewRunModals } from './ExperimentViewRunModals';
-import { ExperimentPageSearchFacetsState } from '../../models/ExperimentPageSearchFacetsState';
-import { RunInfoEntity } from '../../../../types';
+import type { ExperimentPageSearchFacetsState } from '../../models/ExperimentPageSearchFacetsState';
+import type { RunInfoEntity } from '../../../../types';
 import { useDesignSystemTheme } from '@databricks/design-system';
-import { shouldEnableTaggingMultipleRuns } from '@mlflow/mlflow/src/common/utils/FeatureUtils';
 import { ExperimentViewRunsControlsActionsSelectTags } from './ExperimentViewRunsControlsActionsSelectTags';
+import { useRegisterSelectedIds } from '@mlflow/mlflow/src/assistant';
 
 export type ExperimentViewRunsControlsActionsProps = {
   viewState: ExperimentPageViewState;
@@ -22,18 +22,20 @@ export type ExperimentViewRunsControlsActionsProps = {
   refreshRuns: () => void;
 };
 
-const CompareRunsButtonWrapper: React.FC = ({ children }) => <>{children}</>;
+const CompareRunsButtonWrapper: React.FC<React.PropsWithChildren<unknown>> = ({ children }) => <>{children}</>;
 
 export const ExperimentViewRunsControlsActions = React.memo(
+  // eslint-disable-next-line react-component-name/react-component-name -- TODO(FEINF-4716)
   ({ viewState, runsData, searchFacetsState, refreshRuns }: ExperimentViewRunsControlsActionsProps) => {
-    const usingTaggingMultipleRuns = shouldEnableTaggingMultipleRuns();
-
     const { runsSelected } = viewState;
     const { runInfos, tagsList } = runsData;
     const { lifecycleFilter } = searchFacetsState;
 
     const navigate = useNavigate();
     const { theme } = useDesignSystemTheme();
+
+    // Register selected runs with the Assistant context
+    useRegisterSelectedIds('selectedRunIds', runsSelected);
 
     const [showDeleteRunModal, setShowDeleteRunModal] = useState(false);
     const [showRestoreRunModal, setShowRestoreRunModal] = useState(false);
@@ -94,7 +96,6 @@ export const ExperimentViewRunsControlsActions = React.memo(
             >
               <FormattedMessage
                 defaultMessage="Delete"
-                // eslint-disable-next-line max-len
                 description="String for the delete button to delete a particular experiment run"
               />
             </Button>
@@ -108,7 +109,6 @@ export const ExperimentViewRunsControlsActions = React.memo(
             >
               <FormattedMessage
                 defaultMessage="Restore"
-                // eslint-disable-next-line max-len
                 description="String for the restore button to undo the experiments that were deleted"
               />
             </Button>
@@ -123,22 +123,18 @@ export const ExperimentViewRunsControlsActions = React.memo(
             >
               <FormattedMessage
                 defaultMessage="Compare"
-                // eslint-disable-next-line max-len
                 description="String for the compare button to compare experiment runs to find an ideal model"
               />
             </Button>
           </CompareRunsButtonWrapper>
-          {usingTaggingMultipleRuns && (
-            <>
-              <div css={styles.buttonSeparator} />
-              <ExperimentViewRunsControlsActionsSelectTags
-                runsSelected={runsSelected}
-                runInfos={runInfos}
-                tagsList={tagsList}
-                refreshRuns={refreshRuns}
-              />
-            </>
-          )}
+
+          <div css={styles.buttonSeparator} />
+          <ExperimentViewRunsControlsActionsSelectTags
+            runsSelected={runsSelected}
+            runInfos={runInfos}
+            tagsList={tagsList}
+            refreshRuns={refreshRuns}
+          />
         </div>
         <ExperimentViewRunModals
           runsSelected={runsSelected}

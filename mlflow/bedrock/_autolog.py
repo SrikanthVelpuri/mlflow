@@ -1,18 +1,26 @@
 import io
 import json
-from typing import Any, Callable, Union
+import logging
+from typing import Any
 
 from botocore.client import BaseClient
 from botocore.response import StreamingBody
 
 import mlflow
 from mlflow.bedrock import FLAVOR_NAME
-from mlflow.entities import SpanType
+from mlflow.bedrock.chat import convert_tool_to_mlflow_chat_tool
+from mlflow.bedrock.stream import ConverseStreamWrapper, InvokeModelStreamWrapper
+from mlflow.bedrock.utils import parse_complete_token_usage_from_response, skip_if_trace_disabled
+from mlflow.entities import LiveSpan, SpanType
+from mlflow.tracing.constant import SpanAttributeKey
+from mlflow.tracing.fluent import start_span_no_context
+from mlflow.tracing.utils import set_span_chat_tools
 from mlflow.utils.autologging_utils import safe_patch
-from mlflow.utils.autologging_utils.config import AutoLoggingConfig
 
 _BEDROCK_RUNTIME_SERVICE_NAME = "bedrock-runtime"
 _BEDROCK_SPAN_PREFIX = "BedrockRuntime."
+
+_logger = logging.getLogger(__name__)
 
 
 def patched_create_client(original, self, *args, **kwargs):
@@ -35,6 +43,12 @@ def patch_bedrock_runtime_client(client_class: type[BaseClient]):
     """
     # The most basic model invocation API
     safe_patch(FLAVOR_NAME, client_class, "invoke_model", _patched_invoke_model)
+    safe_patch(
+        FLAVOR_NAME,
+        client_class,
+        "invoke_model_with_response_stream",
+        _patched_invoke_model_with_response_stream,
+    )
 
     if hasattr(client_class, "converse"):
         # The new "converse" API was introduced in boto3 1.35 to access all models
@@ -42,28 +56,42 @@ def patch_bedrock_runtime_client(client_class: type[BaseClient]):
         # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/bedrock-runtime/client/converse.html
         safe_patch(FLAVOR_NAME, client_class, "converse", _patched_converse)
 
+    if hasattr(client_class, "converse_stream"):
+        safe_patch(FLAVOR_NAME, client_class, "converse_stream", _patched_converse_stream)
 
-def _skip_if_trace_disabled(func: Callable[..., Any]) -> Callable[..., Any]:
+
+def _parse_usage_from_response(
+    response_data: dict[str, Any] | str,
+) -> dict[str, int] | None:
+    """Parse token usage from Bedrock API response body.
+
+    Args:
+        response_data: The response body from Bedrock API, either as dict or string.
+
+    Returns:
+        Standardized token usage dictionary, or None if parsing fails or no usage found.
     """
-    A decorator to apply the function only if trace autologging is enabled.
-    This decorator is used to skip the test if the trace autologging is disabled.
-    """
+    try:
+        if isinstance(response_data, dict):
+            if usage_data := response_data.get("usage"):
+                return parse_complete_token_usage_from_response(usage_data)
 
-    def wrapper(original, self, *args, **kwargs):
-        config = AutoLoggingConfig.init(flavor_name=FLAVOR_NAME)
-        if not config.log_traces:
-            return original(self, *args, **kwargs)
+            # If no "usage" field, check if the response itself contains token fields
+            # (e.g., Meta Llama responses have prompt_token_count, generation_token_count)
+            return parse_complete_token_usage_from_response(response_data)
+        return None
+    except (KeyError, TypeError, ValueError) as e:
+        _logger.debug(f"Failed to parse token usage from response: {e}")
+        return None
 
-        return func(original, self, *args, **kwargs)
 
-    return wrapper
-
-
-@_skip_if_trace_disabled
+@skip_if_trace_disabled
 def _patched_invoke_model(original, self, *args, **kwargs):
     with mlflow.start_span(name=f"{_BEDROCK_SPAN_PREFIX}{original.__name__}") as span:
         # NB: Bedrock client doesn't accept any positional arguments
         span.set_inputs(kwargs)
+
+        _extract_and_set_model_name(span, kwargs)
 
         result = original(self, *args, **kwargs)
 
@@ -75,10 +103,34 @@ def _patched_invoke_model(original, self, *args, **kwargs):
         # with the key "embedding". This might change in the future.
         span_type = SpanType.EMBEDDING if "embedding" in parsed_response_body else SpanType.LLM
         span.set_span_type(span_type)
-
         span.set_outputs({**result, "body": parsed_response_body})
 
+        # Parse and set token usage information if available
+        if usage_data := _parse_usage_from_response(parsed_response_body):
+            span.set_attribute(SpanAttributeKey.CHAT_USAGE, usage_data)
+
         return result
+
+
+@skip_if_trace_disabled
+def _patched_invoke_model_with_response_stream(original, self, *args, **kwargs):
+    span = start_span_no_context(
+        name=f"{_BEDROCK_SPAN_PREFIX}{original.__name__}",
+        # NB: Since we don't inspect the response body for this method, the span type is unknown.
+        # We assume it is LLM as using streaming for embedding is not common.
+        span_type=SpanType.LLM,
+        inputs=kwargs,
+    )
+
+    _extract_and_set_model_name(span, kwargs)
+
+    result = original(self, *args, **kwargs)
+
+    # To avoid consuming the stream during serialization, set dummy outputs for the span.
+    span.set_outputs({**result, "body": "EventStream"})
+
+    result["body"] = InvokeModelStreamWrapper(stream=result["body"], span=span)
+    return result
 
 
 def _buffer_stream(raw_stream: StreamingBody) -> StreamingBody:
@@ -95,7 +147,7 @@ def _buffer_stream(raw_stream: StreamingBody) -> StreamingBody:
     return StreamingBody(buffered_response, raw_stream._content_length)
 
 
-def _parse_invoke_model_response_body(response_body: StreamingBody) -> Union[dict[str, Any], str]:
+def _parse_invoke_model_response_body(response_body: StreamingBody) -> dict[str, Any] | str:
     content = response_body.read()
     try:
         return json.loads(content)
@@ -111,7 +163,7 @@ def _parse_invoke_model_response_body(response_body: StreamingBody) -> Union[dic
         response_body._amount_read = 0
 
 
-@_skip_if_trace_disabled
+@skip_if_trace_disabled
 def _patched_converse(original, self, *args, **kwargs):
     with mlflow.start_span(
         name=f"{_BEDROCK_SPAN_PREFIX}{original.__name__}",
@@ -119,6 +171,69 @@ def _patched_converse(original, self, *args, **kwargs):
     ) as span:
         # NB: Bedrock client doesn't accept any positional arguments
         span.set_inputs(kwargs)
+        span.set_attribute(SpanAttributeKey.MESSAGE_FORMAT, "bedrock")
+
+        _extract_and_set_model_name(span, kwargs)
+
+        _set_tool_attributes(span, kwargs)
+
         result = original(self, *args, **kwargs)
         span.set_outputs(result)
+
+        # Parse and set token usage information if available
+        if usage_data := _parse_usage_from_response(result):
+            span.set_attribute(SpanAttributeKey.CHAT_USAGE, usage_data)
+
         return result
+
+
+@skip_if_trace_disabled
+def _patched_converse_stream(original, self, *args, **kwargs):
+    # NB: Do not use fluent API to create a span for streaming response. If we do so,
+    # the span context will remain active until the stream is fully exhausted, which
+    # can lead to super hard-to-debug issues.
+    attributes = {SpanAttributeKey.MESSAGE_FORMAT: "bedrock"}
+
+    if model_id := kwargs.get("modelId"):
+        attributes[SpanAttributeKey.MODEL] = model_id
+        match model_id.split(".", 1):
+            case [provider, _]:
+                attributes[SpanAttributeKey.MODEL_PROVIDER] = provider
+
+    span = start_span_no_context(
+        name=f"{_BEDROCK_SPAN_PREFIX}{original.__name__}",
+        span_type=SpanType.CHAT_MODEL,
+        inputs=kwargs,
+        attributes=attributes,
+    )
+    _set_tool_attributes(span, kwargs)
+
+    result = original(self, *args, **kwargs)
+
+    if span:
+        result["stream"] = ConverseStreamWrapper(
+            stream=result["stream"],
+            span=span,
+            inputs=kwargs,
+        )
+
+    return result
+
+
+def _set_tool_attributes(span, kwargs):
+    """Extract tool attributes for the Bedrock Converse API call."""
+    if tool_config := kwargs.get("toolConfig"):
+        try:
+            tools = [convert_tool_to_mlflow_chat_tool(tool) for tool in tool_config["tools"]]
+            set_span_chat_tools(span, tools)
+        except Exception as e:
+            _logger.debug(f"Failed to set tools for {span}. Error: {e}")
+
+
+def _extract_and_set_model_name(span: LiveSpan, kwargs: dict[str, Any]):
+    """Extract model name from kwargs and set it on the span."""
+    if model_id := kwargs.get("modelId"):
+        span.set_attribute(SpanAttributeKey.MODEL, model_id)
+        match model_id.split(".", 1):
+            case [provider, _]:
+                span.set_attribute(SpanAttributeKey.MODEL_PROVIDER, provider)

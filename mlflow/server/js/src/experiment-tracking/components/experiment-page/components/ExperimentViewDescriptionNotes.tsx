@@ -1,26 +1,26 @@
-import { ExperimentEntity, KeyValueEntity } from '../../../types';
+import type { ExperimentEntity } from '../../../types';
+import type { KeyValueEntity } from '../../../../common/types';
 import {
   Button,
   ChevronDownIcon,
   ChevronUpIcon,
   Modal,
   PencilIcon,
-  LegacyTooltip,
+  Tooltip,
   useDesignSystemTheme,
 } from '@databricks/design-system';
 import { useCallback, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { getExperimentTags } from '../../../reducers/Reducers';
 import { NOTE_CONTENT_TAG } from '../../../utils/NoteUtils';
-import { useFetchExperiments } from '../hooks/useFetchExperiments';
-import { ThunkDispatch } from '../../../../redux-types';
-import React from 'react';
-import ReactMde, { SvgIcon } from 'react-mde';
+import type { ThunkDispatch } from '../../../../redux-types';
+import { SvgIcon } from 'react-mde';
 import {
   forceAnchorTagNewTab,
   getMarkdownConverter,
   sanitizeConvertedHtml,
 } from '../../../../common/utils/MarkdownUtils';
+import { ThemeAwareReactMde } from '../../../../common/components/EditableNote';
 import { FormattedMessage } from 'react-intl';
 import { setExperimentTagApi } from '../../../actions';
 
@@ -64,8 +64,9 @@ export const ExperimentViewDescriptionNotes = ({
   });
   setShowAddDescriptionButton(!storedNote);
 
-  const [tmpNote, setTmpNote] = useState(storedNote);
-  const [selectedTab, setSelectedTab] = useState<'write' | 'preview' | undefined>('write');
+  const effectiveNote = storedNote || defaultValue;
+  const [tmpNote, setTmpNote] = useState(effectiveNote);
+  const [selectedTab, setSelectedTab] = useState<'write' | 'preview'>('write');
   const [isExpanded, setIsExpanded] = useState(false);
 
   const { theme } = useDesignSystemTheme();
@@ -79,7 +80,7 @@ export const ExperimentViewDescriptionNotes = ({
   const dispatch = useDispatch<ThunkDispatch>();
 
   const handleSubmitEditNote = useCallback(
-    (updatedNote: any) => {
+    (updatedNote?: string) => {
       setEditing(false);
       setShowAddDescriptionButton(!updatedNote);
       const action = setExperimentTagApi(experiment.experimentId, NOTE_CONTENT_TAG, updatedNote);
@@ -88,13 +89,31 @@ export const ExperimentViewDescriptionNotes = ({
     [experiment.experimentId, dispatch, setEditing, setShowAddDescriptionButton, onNoteUpdated],
   );
 
+  const sanitizedContent = getSanitizedHtmlContent(effectiveNote);
+  const hasContent = sanitizedContent && sanitizedContent.trim().length > 0;
+  const getIcon = useCallback(
+    (name: string) => {
+      return (
+        <Tooltip componentId="mlflow.experiment-tracking.experiment-description.edit" content={name}>
+          <span css={{ color: theme.colors.textPrimary }}>
+            <SvgIcon icon={name} />
+          </span>
+        </Tooltip>
+      );
+    },
+    [theme],
+  );
+
   return (
-    <div>
-      {(tmpNote ?? defaultValue) && (
+    <div
+      css={{
+        paddingBottom: theme.spacing.sm,
+        borderBottom: `1px solid ${theme.colors.border}`,
+      }}
+    >
+      {hasContent && (
         <div
-          style={{
-            whiteSpace: isExpanded ? 'normal' : 'pre',
-            lineHeight: theme.typography.lineHeightSm,
+          css={{
             background: theme.colors.backgroundSecondary,
             display: 'flex',
             alignItems: 'flex-start',
@@ -102,18 +121,29 @@ export const ExperimentViewDescriptionNotes = ({
           }}
         >
           <div
-            style={{
+            css={{
               flexGrow: 1,
               marginRight: PADDING_HORIZONTAL,
               overflow: 'hidden',
               overflowWrap: isExpanded ? 'break-word' : undefined,
               padding: `${theme.spacing.sm}px ${PADDING_HORIZONTAL}px`,
               maxHeight: isExpanded ? 'none' : COLLAPSE_MAX_HEIGHT + 'px',
+              wordBreak: 'break-word',
+              '&>:first-child': {
+                marginBlockStart: 0,
+                ...(isExpanded
+                  ? {}
+                  : {
+                      display: '-webkit-box',
+                      WebkitLineClamp: 2,
+                      WebkitBoxOrient: 'vertical',
+                    }),
+              },
             }}
           >
             <div
               // eslint-disable-next-line react/no-danger
-              dangerouslySetInnerHTML={{ __html: getSanitizedHtmlContent(tmpNote ?? defaultValue) }}
+              dangerouslySetInnerHTML={{ __html: sanitizedContent }}
             />
           </div>
           <Button
@@ -159,30 +189,22 @@ export const ExperimentViewDescriptionNotes = ({
           setEditing(false);
         }}
         onCancel={() => {
-          setTmpNote(storedNote);
+          setTmpNote(effectiveNote);
           setEditing(false);
         }}
       >
-        <React.Fragment>
-          <ReactMde
-            value={tmpNote}
-            minEditorHeight={MIN_EDITOR_HEIGHT}
-            maxEditorHeight={MAX_EDITOR_HEIGHT}
-            minPreviewHeight={MIN_PREVIEW_HEIGHT}
-            toolbarCommands={toolbarCommands}
-            onChange={(value) => setTmpNote(value)}
-            selectedTab={selectedTab}
-            onTabChange={(newTab) => setSelectedTab(newTab)}
-            generateMarkdownPreview={() => Promise.resolve(getSanitizedHtmlContent(tmpNote))}
-            getIcon={(name) => (
-              <LegacyTooltip title={name}>
-                <span css={{ color: theme.colors.textPrimary }}>
-                  <SvgIcon icon={name} />
-                </span>
-              </LegacyTooltip>
-            )}
-          />
-        </React.Fragment>
+        <ThemeAwareReactMde
+          value={tmpNote || ''}
+          minEditorHeight={MIN_EDITOR_HEIGHT}
+          maxEditorHeight={MAX_EDITOR_HEIGHT}
+          minPreviewHeight={MIN_PREVIEW_HEIGHT}
+          toolbarCommands={toolbarCommands}
+          onChange={(value) => setTmpNote(value)}
+          selectedTab={selectedTab}
+          onTabChange={(newTab) => setSelectedTab(newTab)}
+          generateMarkdownPreview={() => Promise.resolve(getSanitizedHtmlContent(tmpNote))}
+          getIcon={getIcon}
+        />
       </Modal>
     </div>
   );

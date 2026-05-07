@@ -1,7 +1,14 @@
-import { DangerIcon, Empty, ParagraphSkeleton, TitleSkeleton, useDesignSystemTheme } from '@databricks/design-system';
+import {
+  DangerIcon,
+  Empty,
+  LegacySkeleton,
+  ParagraphSkeleton,
+  TitleSkeleton,
+  useDesignSystemTheme,
+} from '@databricks/design-system';
 import { useSelector } from 'react-redux';
 import invariant from 'invariant';
-import { useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 
 import { PageContainer } from '../../../common/components/PageContainer';
 import { useNavigate, useParams } from '../../../common/utils/RoutingUtils';
@@ -9,29 +16,32 @@ import Utils from '../../../common/utils/Utils';
 import { RunPageTabName } from '../../constants';
 import { RenameRunModal } from '../modals/RenameRunModal';
 import { RunViewArtifactTab } from './RunViewArtifactTab';
-import { RunViewHeader } from './RunViewHeader';
-import { RunViewMetricCharts } from './RunViewMetricCharts';
+import { RunViewHeader, type RunViewHeaderProps } from './RunViewHeader';
+import { RunViewIssuesTab } from './RunViewIssuesTab';
 import { RunViewOverview } from './RunViewOverview';
 import { useRunDetailsPageData } from './hooks/useRunDetailsPageData';
 import { useRunViewActiveTab } from './useRunViewActiveTab';
-import { ReduxState } from '../../../redux-types';
+import type { ReduxState } from '../../../redux-types';
 import { ErrorWrapper } from '../../../common/utils/ErrorWrapper';
 import { RunNotFoundView } from '../RunNotFoundView';
 import { ErrorCodes } from '../../../common/constants';
 import NotFoundPage from '../NotFoundPage';
+import { RunViewEvaluationsTab } from '../evaluations/RunViewEvaluationsTab';
 import { FormattedMessage } from 'react-intl';
 import { isSystemMetricKey } from '../../utils/MetricsUtils';
 import DeleteRunModal from '../modals/DeleteRunModal';
 import Routes from '../../routes';
-import { RunViewMetricChartsV2 } from './RunViewMetricChartsV2';
+import { RunViewMetricCharts } from './RunViewMetricCharts';
 import {
-  shouldEnableRunDetailsPageTracesTab,
-  shouldUseUnifiedRunCharts,
   shouldEnableGraphQLRunDetailsPage,
+  shouldUseGetLoggedModelsBatchAPI,
 } from '@mlflow/mlflow/src/common/utils/FeatureUtils';
 import { useMediaQuery } from '@databricks/web-shared/hooks';
-import { RunViewTracesTab } from './RunViewTracesTab';
 import { getGraphQLErrorMessage } from '../../../graphql/get-graphql-error';
+import { useLoggedModelsForExperimentRun } from '../experiment-page/hooks/useLoggedModelsForExperimentRun';
+import { useLoggedModelsForExperimentRunV2 } from '../experiment-page/hooks/useLoggedModelsForExperimentRunV2';
+import { useExperimentKind } from '../../utils/ExperimentKindUtils';
+import type { KeyValueEntity } from '../../../common/types';
 
 const RunPageLoadingState = () => (
   <PageContainer>
@@ -45,7 +55,26 @@ const RunPageLoadingState = () => (
   </PageContainer>
 );
 
-export const RunPage = () => {
+export interface RunPageProps {
+  /** Custom breadcrumbs to display in the header */
+  customBreadcrumbs?: RunViewHeaderProps['customBreadcrumbs'];
+  /** Props to pass to RunViewModeSwitch for custom tab configuration */
+  tabSwitchProps?: RunViewHeaderProps['tabSwitchProps'];
+  /** Custom callback after successful run deletion */
+  onDeleteSuccess?: (experimentId: string) => void;
+  /** Render function to replace the entire Overview tab. Receives run data as props. */
+  renderCustomOverview?: (props: {
+    runUuid: string;
+    runInfo: NonNullable<ReturnType<typeof useRunDetailsPageData>['runInfo']>;
+    tags: Record<string, KeyValueEntity>;
+    onRunDataUpdated: () => void;
+  }) => React.ReactNode;
+  /** Hide the compare selector in the traces tab */
+  hideTracesCompareSelector?: boolean;
+}
+
+export const RunPage = (props: RunPageProps) => {
+  const { customBreadcrumbs, tabSwitchProps, onDeleteSuccess, renderCustomOverview, hideTracesCompareSelector } = props;
   const { runUuid, experimentId } = useParams<{
     runUuid: string;
     experimentId: string;
@@ -57,6 +86,10 @@ export const RunPage = () => {
 
   invariant(runUuid, '[RunPage] Run UUID route param not provided');
   invariant(experimentId, '[RunPage] Experiment ID route param not provided');
+
+  // After invariant checks, we can safely cast these as non-null
+  const safeRunUuid = runUuid as string;
+  const safeExperimentId = experimentId as string;
 
   const {
     experiment,
@@ -71,10 +104,15 @@ export const RunPage = () => {
     runFetchError,
     apiError,
     datasets,
+    runInputs,
+    runOutputs,
+    registeredModelVersionSummaries,
   } = useRunDetailsPageData({
-    experimentId,
-    runUuid,
+    experimentId: safeExperimentId,
+    runUuid: safeRunUuid,
   });
+
+  const hasRunData = Boolean(runInfo);
 
   const [modelMetricKeys, systemMetricKeys] = useMemo<[string[], string[]]>(() => {
     if (!latestMetrics) {
@@ -93,56 +131,98 @@ export const RunPage = () => {
 
   const activeTab = useRunViewActiveTab();
 
+  const isUsingGetLoggedModelsApi = shouldUseGetLoggedModelsBatchAPI();
+
+  const loggedModelsForRun = useLoggedModelsForExperimentRun(
+    safeExperimentId,
+    safeRunUuid,
+    runInputs,
+    runOutputs,
+    !isUsingGetLoggedModelsApi,
+  );
+  const loggedModelsForRunV2 = useLoggedModelsForExperimentRunV2({
+    runInputs,
+    runOutputs,
+    enabled: isUsingGetLoggedModelsApi,
+  });
+
+  const {
+    error: loggedModelsError,
+    isLoading: isLoadingLoggedModels,
+    models: loggedModelsV3,
+  } = isUsingGetLoggedModelsApi ? loggedModelsForRunV2 : loggedModelsForRun;
+
+  const experimentKind = useExperimentKind(experiment?.tags);
+
   const renderActiveTab = () => {
     if (!runInfo) {
       return null;
     }
+    const renderEvaluationTab = () => (
+      <RunViewEvaluationsTab
+        runUuid={safeRunUuid}
+        runTags={tags}
+        experiment={experiment}
+        experimentId={safeExperimentId}
+        runDisplayName={Utils.getRunDisplayName(runInfo, safeRunUuid)}
+        hideCompareSelector={hideTracesCompareSelector}
+      />
+    );
     switch (activeTab) {
       case RunPageTabName.MODEL_METRIC_CHARTS:
-        if (shouldUseUnifiedRunCharts()) {
-          return (
-            <RunViewMetricChartsV2
-              key="model"
-              mode="model"
-              metricKeys={modelMetricKeys}
-              runInfo={runInfo}
-              latestMetrics={latestMetrics}
-              tags={tags}
-              params={params}
-            />
-          );
-        } else {
-          return <RunViewMetricCharts mode="model" metricKeys={modelMetricKeys} runInfo={runInfo} />;
-        }
+        return (
+          <RunViewMetricCharts
+            key="model"
+            mode="model"
+            metricKeys={modelMetricKeys}
+            runInfo={runInfo}
+            latestMetrics={latestMetrics}
+            tags={tags}
+            params={params}
+          />
+        );
+
       case RunPageTabName.SYSTEM_METRIC_CHARTS:
-        if (shouldUseUnifiedRunCharts()) {
-          return (
-            <RunViewMetricChartsV2
-              key="system"
-              mode="system"
-              metricKeys={systemMetricKeys}
-              runInfo={runInfo}
-              latestMetrics={latestMetrics}
-              tags={tags}
-              params={params}
-            />
-          );
-        } else {
-          return <RunViewMetricCharts mode="system" metricKeys={systemMetricKeys} runInfo={runInfo} />;
-        }
+        return (
+          <RunViewMetricCharts
+            key="system"
+            mode="system"
+            metricKeys={systemMetricKeys}
+            runInfo={runInfo}
+            latestMetrics={latestMetrics}
+            tags={tags}
+            params={params}
+          />
+        );
+      case RunPageTabName.EVALUATIONS:
+        return renderEvaluationTab();
       case RunPageTabName.ARTIFACTS:
         return (
           <RunViewArtifactTab
-            runUuid={runUuid}
+            runUuid={safeRunUuid}
             runTags={tags}
-            experimentId={experimentId}
+            runOutputs={runOutputs}
+            experimentId={safeExperimentId}
             artifactUri={runInfo.artifactUri ?? undefined}
           />
         );
       case RunPageTabName.TRACES:
-        if (shouldEnableRunDetailsPageTracesTab()) {
-          return <RunViewTracesTab runUuid={runUuid} runTags={tags} experimentId={experimentId} />;
-        }
+        return renderEvaluationTab();
+      case RunPageTabName.ISSUES:
+        return <RunViewIssuesTab runUuid={safeRunUuid} experimentId={safeExperimentId} />;
+    }
+
+    if (renderCustomOverview) {
+      return (
+        <>
+          {renderCustomOverview({
+            runUuid: safeRunUuid,
+            runInfo,
+            tags,
+            onRunDataUpdated: refetchRun,
+          })}
+        </>
+      );
     }
 
     return (
@@ -151,9 +231,16 @@ export const RunPage = () => {
         tags={tags}
         params={params}
         latestMetrics={latestMetrics}
-        runUuid={runUuid}
+        runUuid={safeRunUuid}
         onRunDataUpdated={refetchRun}
+        runInputs={runInputs}
+        runOutputs={runOutputs}
         datasets={datasets}
+        registeredModelVersionSummaries={registeredModelVersionSummaries}
+        loggedModelsV3={loggedModelsV3}
+        isLoadingLoggedModels={isLoadingLoggedModels}
+        loggedModelsError={loggedModelsError ?? undefined}
+        experimentKind={experimentKind}
       />
     );
   };
@@ -171,7 +258,7 @@ export const RunPage = () => {
     apiError?.code === ErrorCodes.RESOURCE_DOES_NOT_EXIST ||
     (error && getGraphQLErrorMessage(error).match(/not found$/))
   ) {
-    return <RunNotFoundView runId={runUuid} />;
+    return <RunNotFoundView runId={safeRunUuid} />;
   }
 
   // Handle experiment not found error
@@ -188,7 +275,13 @@ export const RunPage = () => {
   }
 
   // Catch-all for GraphQL errors
-  if (shouldEnableGraphQLRunDetailsPage() && (error || apiError)) {
+  if (
+    shouldEnableGraphQLRunDetailsPage() &&
+    (error || apiError) &&
+    // We display the error only if we have no run data, as it's possible
+    // to get partial results due to failure in a nested resolver
+    !hasRunData
+  ) {
     return (
       <div css={{ marginTop: theme.spacing.lg }}>
         <Empty
@@ -220,11 +313,16 @@ export const RunPage = () => {
           handleRenameRunClick={() => setRenameModalVisible(true)}
           handleDeleteRunClick={() => setDeleteModalVisible(true)}
           hasComparedExperimentsBefore={hasComparedExperimentsBefore}
-          runDisplayName={Utils.getRunDisplayName(runInfo, runUuid)}
+          runDisplayName={Utils.getRunDisplayName(runInfo, safeRunUuid)}
           runTags={tags}
           runParams={params}
-          runUuid={runUuid}
+          runUuid={safeRunUuid}
+          runOutputs={runOutputs}
           artifactRootUri={runInfo?.artifactUri ?? undefined}
+          registeredModelVersionSummaries={registeredModelVersionSummaries}
+          isLoading={loading || isLoadingLoggedModels}
+          customBreadcrumbs={customBreadcrumbs}
+          tabSwitchProps={tabSwitchProps}
         />
         {/* Scroll tab contents independently within own container */}
         <div css={{ flex: 1, overflow: 'auto', marginBottom: theme.spacing.sm, display: 'flex' }}>
@@ -232,18 +330,22 @@ export const RunPage = () => {
         </div>
       </PageContainer>
       <RenameRunModal
-        runUuid={runUuid}
+        runUuid={safeRunUuid}
         onClose={() => setRenameModalVisible(false)}
         runName={runInfo.runName ?? ''}
         isOpen={renameModalVisible}
         onSuccess={refetchRun}
       />
       <DeleteRunModal
-        selectedRunIds={[runUuid]}
+        selectedRunIds={[safeRunUuid]}
         onClose={() => setDeleteModalVisible(false)}
         isOpen={deleteModalVisible}
         onSuccess={() => {
-          navigate(Routes.getExperimentPageRoute(experimentId));
+          if (onDeleteSuccess) {
+            onDeleteSuccess(safeExperimentId);
+          } else {
+            navigate(Routes.getExperimentPageRoute(safeExperimentId));
+          }
         }}
       />
     </>

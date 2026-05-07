@@ -1,8 +1,9 @@
+import { jest, describe, beforeEach, test, expect } from '@jest/globals';
 import { RenameExperimentModal } from './RenameExperimentModal';
 import { render, screen, waitFor } from '../../../common/utils/TestUtils.react18';
 import { IntlProvider } from 'react-intl';
 import { MockedReduxStoreProvider } from '../../../common/utils/TestUtils';
-import userEvent from '@testing-library/user-event-14';
+import userEvent from '@testing-library/user-event';
 import { MlflowService } from '../../sdk/MlflowService';
 import { getExperimentApi, updateExperimentApi } from '../../actions';
 import Utils from '../../../common/utils/Utils';
@@ -74,7 +75,7 @@ describe('RenameExperimentModal', () => {
     const error = new Error('123');
     jest
       .mocked(updateExperimentApi)
-      .mockImplementation(() => ({ type: 'action', meta: {}, payload: Promise.reject(error) } as any));
+      .mockImplementation(() => ({ type: 'action', meta: {}, payload: Promise.reject(error) }) as any);
 
     renderTestComponent();
     await userEvent.clear(screen.getByLabelText('New experiment name'));
@@ -90,7 +91,7 @@ describe('RenameExperimentModal', () => {
     const error = new Error('123');
     jest
       .mocked(getExperimentApi)
-      .mockImplementation(() => ({ type: 'action', meta: {}, payload: Promise.reject(error) } as any));
+      .mockImplementation(() => ({ type: 'action', meta: {}, payload: Promise.reject(error) }) as any);
 
     renderTestComponent();
     await userEvent.clear(screen.getByLabelText('New experiment name'));

@@ -74,7 +74,7 @@ def test_llama_index_native_save_and_load_model(request, index_fixture, model_pa
 def test_llama_index_native_log_and_load_model(request, index_fixture):
     index = request.getfixturevalue(index_fixture)
     with mlflow.start_run():
-        logged_model = mlflow.llama_index.log_model(index, "model", engine_type="query")
+        logged_model = mlflow.llama_index.log_model(index, name="model", engine_type="query")
 
     loaded_model = mlflow.llama_index.load_model(logged_model.model_uri)
 
@@ -102,7 +102,7 @@ def test_llama_index_load_with_model_config(single_index):
     with mlflow.start_run():
         logged_model = mlflow.llama_index.log_model(
             single_index,
-            "model",
+            name="model",
             engine_type="query",
             model_config={"response_mode": "refine"},
         )
@@ -163,12 +163,10 @@ def test_format_predict_input_correct_schema_complex(single_index, engine_type):
         "embedding": [[1.0]],
     }
     assert isinstance(wrapped_model._format_predict_input(pd.DataFrame(payload)), QueryBundle)
-    payload.update(
-        {
-            "custom_embedding_strs": ["a"],
-            "embedding": [1.0],
-        }
-    )
+    payload.update({
+        "custom_embedding_strs": ["a"],
+        "embedding": [1.0],
+    })
     assert isinstance(wrapped_model._format_predict_input(payload), QueryBundle)
 
 
@@ -190,7 +188,7 @@ def test_query_engine_predict(single_index, with_input_example, payload):
     with mlflow.start_run():
         model_info = mlflow.llama_index.log_model(
             single_index,
-            "model",
+            name="model",
             input_example=payload if with_input_example else None,
             engine_type="query",
         )
@@ -213,20 +211,18 @@ def test_query_engine_predict(single_index, with_input_example, payload):
         ["string", "string"],
         np.array(["string", "string"]),
         pd.DataFrame({"query_str": ["string", "string"]}),
-        pd.DataFrame(
-            {
-                "query_str": ["hi"] * 2,
-                "custom_embedding_strs": [["a"] * _EMBEDDING_DIM] * 2,
-                "embedding": [[1.0] * _EMBEDDING_DIM] * 2,
-            }
-        ),
+        pd.DataFrame({
+            "query_str": ["hi"] * 2,
+            "custom_embedding_strs": [["a"] * _EMBEDDING_DIM] * 2,
+            "embedding": [[1.0] * _EMBEDDING_DIM] * 2,
+        }),
     ],
 )
 def test_query_engine_predict_list(single_index, with_input_example, payload):
     with mlflow.start_run():
         model_info = mlflow.llama_index.log_model(
             single_index,
-            "model",
+            name="model",
             input_example=payload if with_input_example else None,
             engine_type="query",
         )
@@ -275,19 +271,17 @@ def test_query_engine_predict_numeric(model_path, single_index, with_input_examp
             "message": "string",
             _CHAT_MESSAGE_HISTORY_PARAMETER_NAME: [{"role": "user", "content": "string"}] * 3,
         },
-        pd.DataFrame(
-            {
-                "message": ["string"],
-                _CHAT_MESSAGE_HISTORY_PARAMETER_NAME: [[{"role": "user", "content": "string"}]],
-            }
-        ),
+        pd.DataFrame({
+            "message": ["string"],
+            _CHAT_MESSAGE_HISTORY_PARAMETER_NAME: [[{"role": "user", "content": "string"}]],
+        }),
     ],
 )
 def test_chat_engine_predict(single_index, with_input_example, payload):
     with mlflow.start_run():
         model_info = mlflow.llama_index.log_model(
             single_index,
-            "model",
+            name="model",
             input_example=payload if with_input_example else None,
             engine_type="chat",
         )
@@ -299,7 +293,9 @@ def test_chat_engine_predict(single_index, with_input_example, payload):
     model = mlflow.pyfunc.load_model(model_info.model_uri)
     prediction = model.predict(payload)
     assert isinstance(prediction, str)
-    assert prediction.startswith('[{"role": "user",')
+    # a default prompt is added in llama-index 0.13.0
+    # https://github.com/run-llama/llama_index/blob/1e02c7a2324838f7bd5a52c811d35c30dc6a6bd2/llama-index-core/llama_index/core/chat_engine/condense_plus_context.py#L40
+    assert '{"role": "user", "content": "string"}' in prediction
 
 
 @pytest.mark.parametrize("with_input_example", [True, False])
@@ -337,7 +333,7 @@ def test_retriever_engine_predict(single_index, with_input_example):
     with mlflow.start_run():
         model_info = mlflow.llama_index.log_model(
             single_index,
-            "model",
+            name="model",
             input_example=payload if with_input_example else None,
             engine_type="retriever",
         )
@@ -355,7 +351,8 @@ def test_retriever_engine_predict(single_index, with_input_example):
 
 
 def test_llama_index_databricks_integration(monkeypatch, document, model_path, mock_openai):
-    monkeypatch.setenvs({"DATABRICKS_TOKEN": "test", "DATABRICKS_SERVING_ENDPOINT": mock_openai})
+    monkeypatch.setenv("DATABRICKS_TOKEN", "test")
+    monkeypatch.setenv("DATABRICKS_SERVING_ENDPOINT", mock_openai)
     monkeypatch.setattr(Settings, "llm", Databricks(model="dbrx-instruct"))
     monkeypatch.setattr(
         Settings, "embed_model", DatabricksEmbedding(model="databricks-bge-large-en")
@@ -420,7 +417,7 @@ def test_save_load_index_as_code_index(index_code_path, vector_store_class):
     with mlflow.start_run():
         model_info = mlflow.llama_index.log_model(
             index_code_path,
-            "model",
+            name="model",
             engine_type="query",
             input_example="hi",
         )
@@ -443,7 +440,7 @@ def test_save_load_query_engine_as_code():
     with mlflow.start_run():
         model_info = mlflow.llama_index.log_model(
             index_code_path,
-            "model",
+            name="model",
             input_example="hi",
         )
 
@@ -467,7 +464,7 @@ def test_save_load_chat_engine_as_code():
     with mlflow.start_run():
         model_info = mlflow.llama_index.log_model(
             index_code_path,
-            "model",
+            name="model",
             input_example="hi",
         )
 
@@ -501,7 +498,7 @@ def test_save_load_as_code_with_model_config(index_code_path, model_config):
     with mlflow.start_run():
         logged_model = mlflow.llama_index.log_model(
             index_code_path,
-            "model",
+            name="model",
             model_config=model_config,
         )
 
@@ -514,7 +511,7 @@ def test_save_load_as_code_with_model_config(index_code_path, model_config):
 def test_save_engine_with_engine_type_issues_warning(model_path):
     index_code_path = "tests/llama_index/sample_code/query_engine_with_reranker.py"
 
-    with mock.patch("mlflow.llama_index._logger") as mock_logger:
+    with mock.patch("mlflow.llama_index.model._logger") as mock_logger:
         mlflow.llama_index.save_model(
             llama_index_model=index_code_path,
             path=model_path,
@@ -537,7 +534,7 @@ async def test_save_load_workflow_as_code():
     with mlflow.start_run():
         model_info = mlflow.llama_index.log_model(
             index_code_path,
-            "model",
+            name="model",
             input_example={"topic": "pirates"},
         )
 
@@ -560,13 +557,11 @@ async def test_save_load_workflow_as_code():
     assert "pirates" in result
 
     # Batch inference
-    batch_result = pyfunc_loaded_model.predict(
-        [
-            {"topic": "pirates"},
-            {"topic": "ninjas"},
-            {"topic": "robots"},
-        ]
-    )
+    batch_result = pyfunc_loaded_model.predict([
+        {"topic": "pirates"},
+        {"topic": "ninjas"},
+        {"topic": "robots"},
+    ])
     assert len(batch_result) == 3
     assert all(isinstance(r, str) for r in batch_result)
 

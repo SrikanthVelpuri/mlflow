@@ -6,6 +6,7 @@ import pytest
 from google.cloud.storage import Client
 from requests import Response
 
+import mlflow
 from mlflow import MlflowClient
 from mlflow.entities.file_info import FileInfo
 from mlflow.exceptions import MlflowException
@@ -108,12 +109,8 @@ def _mock_temporary_creds_response(temporary_creds):
 
 
 def test_uc_models_artifact_repo_download_artifacts_uses_temporary_creds_aws(monkeypatch):
-    monkeypatch.setenvs(
-        {
-            "DATABRICKS_HOST": "my-host",
-            "DATABRICKS_TOKEN": "my-token",
-        }
-    )
+    monkeypatch.setenv("DATABRICKS_HOST", "my-host")
+    monkeypatch.setenv("DATABRICKS_TOKEN", "my-token")
     artifact_location = "s3://blah_bucket/"
     fake_key_id = "fake_key_id"
     fake_secret_access_key = "fake_secret_access_key"
@@ -163,12 +160,8 @@ def test_uc_models_artifact_repo_download_artifacts_uses_temporary_creds_aws(mon
 
 
 def test_uc_models_artifact_repo_download_artifacts_uses_temporary_creds_azure(monkeypatch):
-    monkeypatch.setenvs(
-        {
-            "DATABRICKS_HOST": "my-host",
-            "DATABRICKS_TOKEN": "my-token",
-        }
-    )
+    monkeypatch.setenv("DATABRICKS_HOST", "my-host")
+    monkeypatch.setenv("DATABRICKS_TOKEN", "my-token")
     artifact_location = "abfss://filesystem@account.dfs.core.windows.net"
     fake_sas_token = "fake_session_token"
     temporary_creds = {
@@ -211,12 +204,8 @@ def test_uc_models_artifact_repo_download_artifacts_uses_temporary_creds_azure(m
 
 
 def test_uc_models_artifact_repo_download_artifacts_uses_temporary_creds_gcp(monkeypatch):
-    monkeypatch.setenvs(
-        {
-            "DATABRICKS_HOST": "my-host",
-            "DATABRICKS_TOKEN": "my-token",
-        }
-    )
+    monkeypatch.setenv("DATABRICKS_HOST", "my-host")
+    monkeypatch.setenv("DATABRICKS_TOKEN", "my-token")
     artifact_location = "gs://test_bucket/some/path"
     fake_oauth_token = "fake_session_token"
     temporary_creds = {
@@ -283,12 +272,8 @@ def test_uc_models_artifact_repo_uses_active_catalog_and_schema():
 
 
 def test_uc_models_artifact_repo_list_artifacts_uses_temporary_creds(monkeypatch):
-    monkeypatch.setenvs(
-        {
-            "DATABRICKS_HOST": "my-host",
-            "DATABRICKS_TOKEN": "my-token",
-        }
-    )
+    monkeypatch.setenv("DATABRICKS_HOST", "my-host")
+    monkeypatch.setenv("DATABRICKS_TOKEN", "my-token")
     artifact_location = "abfss://filesystem@account.dfs.core.windows.net"
     fake_sas_token = "fake_session_token"
     temporary_creds = {
@@ -333,14 +318,12 @@ def test_uc_models_artifact_repo_list_artifacts_uses_temporary_creds(monkeypatch
 
 
 def test_get_feature_dependencies_doesnt_throw():
-    import mlflow
-
     class MyModel(mlflow.pyfunc.PythonModel):
         def predict(self, context, model_input):
             return model_input
 
     with mlflow.start_run():
-        model_info = mlflow.pyfunc.log_model("model", python_model=MyModel())
+        model_info = mlflow.pyfunc.log_model(name="model", python_model=MyModel())
 
     assert (
         mlflow.store._unity_catalog.registry.rest_store.get_feature_dependencies(
@@ -350,15 +333,50 @@ def test_get_feature_dependencies_doesnt_throw():
     )
 
 
+def test_get_feature_dependencies_works_when_experiment_not_found():
+    class MyModel(mlflow.pyfunc.PythonModel):
+        def predict(self, context, model_input):
+            return model_input
+
+    with mlflow.start_run():
+        model_info = mlflow.pyfunc.log_model(name="model", python_model=MyModel())
+
+    # Simulate cross-workspace scenario: get_logged_model would fail
+    with mock.patch(
+        "mlflow.get_logged_model",
+        side_effect=MlflowException("RESOURCE_DOES_NOT_EXIST"),
+    ) as mock_get_logged_model:
+        result = mlflow.store._unity_catalog.registry.rest_store.get_feature_dependencies(
+            model_info.model_uri
+        )
+        assert result == ""
+        mock_get_logged_model.assert_not_called()
+
+
+def test_get_model_version_dependencies_works_when_experiment_not_found():
+    class MyModel(mlflow.pyfunc.PythonModel):
+        def predict(self, context, model_input):
+            return model_input
+
+    with mlflow.start_run():
+        model_info = mlflow.pyfunc.log_model(name="model", python_model=MyModel())
+
+    with mock.patch(
+        "mlflow.get_logged_model",
+        side_effect=MlflowException("RESOURCE_DOES_NOT_EXIST"),
+    ) as mock_get_logged_model:
+        result = mlflow.store._unity_catalog.registry.rest_store.get_model_version_dependencies(
+            model_info.model_uri
+        )
+        assert result == []
+        mock_get_logged_model.assert_not_called()
+
+
 def test_store_use_presigned_url_store_when_disabled(monkeypatch):
     store_package = "mlflow.store.artifact.unity_catalog_models_artifact_repo"
     monkeypatch.setenv("MLFLOW_USE_DATABRICKS_SDK_MODEL_ARTIFACTS_REPO_FOR_UC", "false")
-    monkeypatch.setenvs(
-        {
-            "DATABRICKS_HOST": "my-host",
-            "DATABRICKS_TOKEN": "my-token",
-        }
-    )
+    monkeypatch.setenv("DATABRICKS_HOST", "my-host")
+    monkeypatch.setenv("DATABRICKS_TOKEN", "my-token")
     uc_store = UnityCatalogModelsArtifactRepository(
         "models:/catalog.schema.model/1", "databricks-uc"
     )
@@ -393,12 +411,8 @@ def test_store_use_presigned_url_store_when_disabled(monkeypatch):
 
 
 def test_store_use_presigned_url_store_when_enabled(monkeypatch):
-    monkeypatch.setenvs(
-        {
-            "DATABRICKS_HOST": "my-host",
-            "DATABRICKS_TOKEN": "my-token",
-        }
-    )
+    monkeypatch.setenv("DATABRICKS_HOST", "my-host")
+    monkeypatch.setenv("DATABRICKS_TOKEN", "my-token")
     monkeypatch.setenv("MLFLOW_USE_DATABRICKS_SDK_MODEL_ARTIFACTS_REPO_FOR_UC", "false")
     store_package = "mlflow.store.artifact.unity_catalog_models_artifact_repo"
     creds = TemporaryCredentials(storage_mode=StorageMode.DEFAULT_STORAGE)

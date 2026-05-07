@@ -1,36 +1,37 @@
 import { intersection, throttle, uniq } from 'lodash';
-import { Dash, Layout, Margin } from 'plotly.js';
+import type { Dash, Layout, Margin } from 'plotly.js';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { PlotParams } from 'react-plotly.js';
-import {
+import type { PlotParams } from 'react-plotly.js';
+import type {
   ImageEntity,
-  KeyValueEntity,
   MetricEntitiesByName,
   MetricEntity,
   MetricHistoryByName,
   RunInfoEntity,
 } from '../../../types';
-import { Theme } from '@emotion/react';
-import { LegendLabelData } from './RunsMetricsLegend';
-import { RunGroupParentInfo, RunGroupingAggregateFunction } from '../../experiment-page/utils/experimentPage.row-types';
-import { RunsChartsChartMouseEvent } from '../hooks/useRunsChartsTooltip';
+import type { KeyValueEntity } from '../../../../common/types';
+import type { Theme } from '@emotion/react';
+import type { LegendLabelData } from './RunsMetricsLegend';
+import type {
+  RunGroupParentInfo,
+  RunGroupingAggregateFunction,
+} from '../../experiment-page/utils/experimentPage.row-types';
+import type { RunsChartsChartMouseEvent } from '../hooks/useRunsChartsTooltip';
 import { defineMessages } from 'react-intl';
 import type { ExperimentChartImageDownloadHandler } from '../hooks/useChartImageDownloadHandler';
 import { quantile } from 'd3-array';
 import type { UseGetRunQueryResponseRunInfo } from '../../run-page/hooks/useGetRunQuery';
 import { shouldEnableChartExpressions } from '@mlflow/mlflow/src/common/utils/FeatureUtils';
-import {
-  type RunsChartsLineChartExpression,
-  RunsChartsLineChartYAxisType,
+import type {
   RunsChartsBarCardConfig,
   RunsChartsCardConfig,
   RunsChartsContourCardConfig,
   RunsChartsDifferenceCardConfig,
   RunsChartsLineCardConfig,
   RunsChartsScatterCardConfig,
-  RunsChartType,
   RunsChartsParallelCardConfig,
 } from '../runs-charts.types';
+import { type RunsChartsLineChartExpression, RunsChartsLineChartYAxisType, RunsChartType } from '../runs-charts.types';
 import { isParallelChartConfigured, processParallelCoordinateData } from '../utils/parallelCoordinatesPlot.utils';
 
 /**
@@ -104,6 +105,8 @@ export interface RunsPlotsCommonProps {
 export interface RunsChartAxisDef {
   key: string;
   type: 'METRIC' | 'PARAM';
+  dataAccessKey?: string;
+  datasetName?: string;
 }
 
 export interface RunsChartsRunData {
@@ -375,6 +378,7 @@ export const getLegendDataFromRuns = (
   runsData.map(
     (run): LegendLabelData => ({
       label: run.displayName,
+      uuid: run.uuid,
       color: run.color ?? '',
     }),
   );
@@ -385,6 +389,7 @@ export const getLineChartLegendData = (
   metricKey: string,
   yAxisKey: RunsChartsLineChartYAxisType,
   yAxisExpressions: RunsChartsLineChartExpression[],
+  getCustomLineStyle?: (metricKey: string) => { color: string; dashStyle: Dash } | null,
 ): LegendLabelData[] =>
   runsData.flatMap((runEntry): LegendLabelData[] => {
     if (!runEntry.metricsHistory) {
@@ -402,13 +407,16 @@ export const getLineChartLegendData = (
     }
 
     const metricKeys = selectedMetricKeys ?? [metricKey];
-    return metricKeys.map((metricKey, idx) => ({
-      label: `${runEntry.displayName} (${metricKey})`,
-      color: runEntry.color ?? '',
-      dashStyle: lineDashStyles[idx % lineDashStyles.length],
-      metricKey,
-      uuid: runEntry.uuid,
-    }));
+    return metricKeys.map((metricKey, idx) => {
+      const customLineStyle = getCustomLineStyle?.(metricKey);
+      return {
+        label: `${runEntry.displayName} (${metricKey})`,
+        color: customLineStyle?.color ?? runEntry.color ?? '',
+        dashStyle: customLineStyle?.dashStyle ?? lineDashStyles[idx % lineDashStyles.length],
+        metricKey,
+        uuid: runEntry.uuid,
+      };
+    });
   });
 
 /**
@@ -493,50 +501,70 @@ const isLineChartCard = (card: RunsChartsCardConfig): card is RunsChartsLineCard
 const isParallelChartCard = (card: RunsChartsCardConfig): card is RunsChartsParallelCardConfig =>
   card.type === RunsChartType.PARALLEL;
 
-export const isEmptyChartCard = (chartRunData: RunsChartsRunData[], chartCardConfig: RunsChartsCardConfig) => {
-  const visibleChartRunData = chartRunData.filter((trace) => !trace.hidden);
-
-  if (isContourChartCard(chartCardConfig)) {
-    const metricKeys = [chartCardConfig.xaxis.key, chartCardConfig.yaxis.key, chartCardConfig.zaxis.key];
-    const metricsInRuns = visibleChartRunData.flatMap(({ metrics }) => Object.keys(metrics));
-    return intersection(metricKeys, uniq(metricsInRuns)).length === 0;
+const isIntersectingSet = <T>(a: Set<T>, b: Set<T>): boolean => {
+  for (const e of a) {
+    if (b.has(e)) {
+      return true;
+    }
   }
-
-  if (isBarChartCard(chartCardConfig)) {
-    const metricsInRuns = visibleChartRunData.flatMap(({ metrics }) => Object.keys(metrics));
-    return !metricsInRuns.includes(chartCardConfig.metricKey);
-  }
-
-  if (isScatterChartCard(chartCardConfig)) {
-    const metricKeys = [chartCardConfig.xaxis.key, chartCardConfig.yaxis.key];
-    const metricsInRuns = visibleChartRunData.flatMap(({ metrics }) => Object.keys(metrics));
-    return intersection(metricKeys, uniq(metricsInRuns)).length === 0;
-  }
-
-  if (isDifferenceChartCard(chartCardConfig)) {
-    return chartCardConfig.compareGroups?.length === 0;
-  }
-
-  if (isLineChartCard(chartCardConfig)) {
-    const metricKeys = chartCardConfig.selectedMetricKeys ?? [chartCardConfig.metricKey];
-    const metricsInRuns = visibleChartRunData.flatMap(({ metrics }) => Object.keys(metrics));
-    return intersection(metricKeys, uniq(metricsInRuns)).length === 0;
-  }
-
-  if (isParallelChartCard(chartCardConfig)) {
-    const isConfigured = isParallelChartConfigured(chartCardConfig);
-
-    const relevantChartRunData = chartCardConfig?.showAllRuns ? chartRunData : visibleChartRunData;
-
-    const data = isConfigured
-      ? processParallelCoordinateData(
-          relevantChartRunData,
-          chartCardConfig.selectedParams,
-          chartCardConfig.selectedMetrics,
-        )
-      : [];
-    return data.length === 0;
-  }
-
   return false;
+};
+
+export type EmptyChartCardPredicate = (chartCardConfig: RunsChartsCardConfig) => boolean;
+
+export const createEmptyChartCardPredicate = (chartRunData: RunsChartsRunData[]): EmptyChartCardPredicate => {
+  const visibleChartRunData = chartRunData.filter((trace) => !trace.hidden);
+  const metricsInRuns = new Set(visibleChartRunData.flatMap(({ metrics }) => (metrics ? Object.keys(metrics) : [])));
+
+  return (chartCardConfig) => {
+    if (isContourChartCard(chartCardConfig)) {
+      const metricKeys = new Set([chartCardConfig.xaxis.key, chartCardConfig.yaxis.key, chartCardConfig.zaxis.key]);
+      return !isIntersectingSet(metricKeys, metricsInRuns);
+    }
+
+    if (isBarChartCard(chartCardConfig)) {
+      const barMetricKeys = new Set(
+        chartCardConfig.selectedMetricKeys ?? [chartCardConfig.dataAccessKey ?? chartCardConfig.metricKey],
+      );
+      return !isIntersectingSet(barMetricKeys, metricsInRuns);
+    }
+
+    if (isScatterChartCard(chartCardConfig)) {
+      const metricKeys = new Set([
+        chartCardConfig.xaxis.dataAccessKey ?? chartCardConfig.xaxis.key,
+        chartCardConfig.yaxis.dataAccessKey ?? chartCardConfig.yaxis.key,
+      ]);
+      return !isIntersectingSet(metricKeys, metricsInRuns);
+    }
+
+    if (isDifferenceChartCard(chartCardConfig)) {
+      return chartCardConfig.compareGroups?.length === 0;
+    }
+
+    if (isLineChartCard(chartCardConfig)) {
+      const metricKeys = new Set(chartCardConfig.selectedMetricKeys ?? [chartCardConfig.metricKey]);
+      return !isIntersectingSet(metricKeys, metricsInRuns);
+    }
+
+    if (isParallelChartCard(chartCardConfig)) {
+      const isConfigured = isParallelChartConfigured(chartCardConfig);
+
+      const relevantChartRunData = chartCardConfig?.showAllRuns ? chartRunData : visibleChartRunData;
+
+      const data = isConfigured
+        ? processParallelCoordinateData(
+            relevantChartRunData,
+            chartCardConfig.selectedParams,
+            chartCardConfig.selectedMetrics,
+          )
+        : [];
+      return data.length === 0;
+    }
+
+    return false;
+  };
+};
+
+export const isEmptyChartCard = (chartRunData: RunsChartsRunData[], chartCardConfig: RunsChartsCardConfig) => {
+  return createEmptyChartCardPredicate(chartRunData)(chartCardConfig);
 };

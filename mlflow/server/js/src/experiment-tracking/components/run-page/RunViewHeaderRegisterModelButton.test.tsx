@@ -1,12 +1,14 @@
+import { jest, describe, test, expect } from '@jest/globals';
 import { MemoryRouter, createMLflowRoutePath } from '../../../common/utils/RoutingUtils';
 import { MockedReduxStoreProvider } from '../../../common/utils/TestUtils';
 import { renderWithIntl, act, screen } from '@mlflow/mlflow/src/common/utils/TestUtils.react18';
 import Utils from '../../../common/utils/Utils';
-import { ReduxState } from '../../../redux-types';
 import { RunViewHeaderRegisterModelButton } from './RunViewHeaderRegisterModelButton';
-import { DesignSystemProvider, DesignSystemThemeProvider } from '@databricks/design-system';
-import { KeyValueEntity } from '../../types';
-import userEvent from '@testing-library/user-event-14';
+import { DesignSystemProvider } from '@databricks/design-system';
+import type { KeyValueEntity } from '../../../common/types';
+import userEvent from '@testing-library/user-event';
+import type { RunPageModelVersionSummary } from './hooks/useUnifiedRegisteredModelVersionsSummariesForRun';
+import { prefixRouteWithWorkspace } from '../../../workspaces/utils/WorkspaceUtils';
 
 jest.mock('../../../model-registry/actions', () => ({
   searchRegisteredModelsApi: jest.fn(() => ({ type: 'MOCKED_ACTION', payload: Promise.resolve() })),
@@ -32,17 +34,17 @@ const createLoggedModelHistoryTag = (models: ReturnType<typeof createModelArtifa
   ({
     key: Utils.loggedModelsTag,
     value: JSON.stringify(models),
-  } as any);
+  }) as any;
 
 describe('RunViewHeaderRegisterModelButton', () => {
   const mountComponent = ({
-    entities = {},
     tags = {},
     artifactRootUri,
+    registeredModelVersionSummaries = [],
   }: {
     artifactRootUri?: string;
     tags?: Record<string, KeyValueEntity>;
-    entities?: Partial<Pick<ReduxState['entities'], 'modelVersionsByRunUuid'>>;
+    registeredModelVersionSummaries?: RunPageModelVersionSummary[];
   } = {}) => {
     renderWithIntl(
       <MemoryRouter>
@@ -51,7 +53,6 @@ describe('RunViewHeaderRegisterModelButton', () => {
             state={{
               entities: {
                 modelVersionsByRunUuid: {},
-                ...entities,
               },
             }}
           >
@@ -61,6 +62,7 @@ describe('RunViewHeaderRegisterModelButton', () => {
                 runTags={tags}
                 runUuid={runUuid}
                 experimentId={experimentId}
+                registeredModelVersionSummaries={registeredModelVersionSummaries}
               />
             </div>
           </MockedReduxStoreProvider>
@@ -84,17 +86,15 @@ describe('RunViewHeaderRegisterModelButton', () => {
 
   test('should render simple link for a single registered logged model', () => {
     mountComponent({
-      entities: {
-        modelVersionsByRunUuid: {
-          [runUuid]: [
-            {
-              source: 'file://some/artifact/path/artifact_path',
-              version: '7',
-              name: 'test-model',
-            },
-          ] as any,
+      registeredModelVersionSummaries: [
+        {
+          displayedName: 'test-model',
+          version: '7',
+          link: createMLflowRoutePath('/models/test-model/versions/7'),
+          status: 'READY',
+          source: 'file://some/artifact/path/artifact_path',
         },
-      },
+      ],
       artifactRootUri: 'file://some/artifact/path',
       tags: {
         [Utils.loggedModelsTag]: createLoggedModelHistoryTag([createModelArtifact('artifact_path')]),
@@ -103,7 +103,7 @@ describe('RunViewHeaderRegisterModelButton', () => {
     expect(screen.queryByRole('button', { name: 'Register model' })).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Model registered' })).toHaveAttribute(
       'href',
-      createMLflowRoutePath('/models/test-model/versions/7'),
+      prefixRouteWithWorkspace(createMLflowRoutePath('/models/test-model/versions/7')),
     );
   });
 
@@ -128,17 +128,15 @@ describe('RunViewHeaderRegisterModelButton', () => {
 
   test('should render button and dropdown for multiple models, at least one unregistered', async () => {
     mountComponent({
-      entities: {
-        modelVersionsByRunUuid: {
-          [runUuid]: [
-            {
-              source: 'file://some/artifact/path/artifact_path',
-              version: '7',
-              name: 'test-model',
-            },
-          ] as any,
+      registeredModelVersionSummaries: [
+        {
+          displayedName: 'test-model',
+          version: '7',
+          link: createMLflowRoutePath('/models/test-model/versions/7'),
+          status: '',
+          source: 'file://some/artifact/path/artifact_path',
         },
-      },
+      ],
       artifactRootUri: 'file://some/artifact/path',
       tags: {
         [Utils.loggedModelsTag]: createLoggedModelHistoryTag([
@@ -160,22 +158,22 @@ describe('RunViewHeaderRegisterModelButton', () => {
 
   test('should render button and dropdown for multiple models, all already registered', async () => {
     mountComponent({
-      entities: {
-        modelVersionsByRunUuid: {
-          [runUuid]: [
-            {
-              source: 'file://some/artifact/path/artifact_path',
-              version: '7',
-              name: 'test-model',
-            },
-            {
-              source: 'file://some/artifact/path/another_artifact_path',
-              version: '8',
-              name: 'another-test-model',
-            },
-          ] as any,
+      registeredModelVersionSummaries: [
+        {
+          displayedName: 'test-model',
+          version: '7',
+          link: createMLflowRoutePath('/models/test-model/versions/7'),
+          status: '',
+          source: 'file://some/artifact/path/artifact_path',
         },
-      },
+        {
+          displayedName: 'another-test-model',
+          version: '8',
+          link: createMLflowRoutePath('/models/another-test-model/versions/8'),
+          status: '',
+          source: 'file://some/artifact/path/another_artifact_path',
+        },
+      ],
       artifactRootUri: 'file://some/artifact/path',
       tags: {
         [Utils.loggedModelsTag]: createLoggedModelHistoryTag([

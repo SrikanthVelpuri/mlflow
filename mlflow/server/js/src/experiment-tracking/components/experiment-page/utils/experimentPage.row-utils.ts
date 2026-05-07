@@ -3,24 +3,24 @@ import { isNumber, isString, keyBy, last, sortBy, uniq } from 'lodash';
 import Utils from '../../../../common/utils/Utils';
 import type {
   ExperimentEntity,
-  KeyValueEntity,
   ModelVersionInfoEntity,
   RunInfoEntity,
   RunDatasetWithTags,
   MetricEntity,
 } from '../../../types';
-import {
+import type { KeyValueEntity } from '../../../../common/types';
+import type { LoggedModelProto } from '../../../types';
+import type {
   RowGroupRenderMetadata,
   RowRenderMetadata,
   RunGroupParentInfo,
-  RunGroupingAggregateFunction,
-  RunGroupingMode,
   RunRowDateAndNestInfo,
   RunRowModelsInfo,
   RunRowType,
   RunRowVersionInfo,
 } from './experimentPage.row-types';
-import { ExperimentRunsSelectorResult } from './experimentRuns.selector';
+import { RunGroupingAggregateFunction, RunGroupingMode } from './experimentPage.row-types';
+import type { ExperimentRunsSelectorResult } from './experimentRuns.selector';
 import {
   EXPERIMENT_FIELD_PREFIX_METRIC,
   EXPERIMENT_FIELD_PREFIX_PARAM,
@@ -28,13 +28,10 @@ import {
   EXPERIMENT_PARENT_ID_TAG,
 } from './experimentPage.common-utils';
 import { getStableColorForRun } from '../../../utils/RunNameUtils';
-import {
-  shouldEnableToggleIndividualRunsInGroups,
-  shouldUseNewRunRowsVisibilityModel,
-} from '../../../../common/utils/FeatureUtils';
 import { getGroupedRowRenderMetadata, type RunsGroupByConfig } from './experimentPage.group-row-utils';
 import { type ExperimentPageUIState, RUNS_VISIBILITY_MODE } from '../models/ExperimentPageUIState';
 import { determineIfRowIsHidden } from './experimentPage.common-row-utils';
+import { type ExperimentPageSearchFacetsState } from '../models/ExperimentPageSearchFacetsState';
 
 /**
  * A simple tree-like interface used in nested rows calculations.
@@ -213,6 +210,7 @@ const createKeyValueDataForRunRow = (
 export const prepareRunsGridData = ({
   experiments,
   modelVersionsByRunUuid,
+  loggedModelsV3ByRunUuid = {},
   runsExpanded,
   nestChildren,
   referenceTime,
@@ -228,6 +226,7 @@ export const prepareRunsGridData = ({
   groupBy = null,
   groupsExpanded = {},
   useGroupedValuesInCharts,
+  searchFacetsState,
 }: PrepareRunsGridDataParams) => {
   const experimentNameMap = Utils.getExperimentNameMap(Utils.sortExperimentsById(experiments)) as Record<
     string,
@@ -246,6 +245,7 @@ export const prepareRunsGridData = ({
         runData,
         groupBy,
         groupsExpanded,
+        searchFacetsState,
         runsHidden,
         runsVisibilityMap,
         runsHiddenMode,
@@ -331,6 +331,7 @@ export const prepareRunsGridData = ({
     const models: RunRowModelsInfo = {
       registeredModels: modelVersionsByRunUuid[runInfo.runUuid] || [], // ModelInfoEntity
       loggedModels: Utils.getLoggedModelsFromTags(tags),
+      loggedModelsV3: loggedModelsV3ByRunUuid[runInfo.runUuid] || [],
       experimentId: runInfo.experimentId,
       runUuid: runInfo.runUuid,
     };
@@ -361,6 +362,7 @@ export const prepareRunsGridData = ({
       duration,
       user,
       runName,
+      runStatus: runInfo.status,
       tags,
       models,
       params,
@@ -399,12 +401,7 @@ export const prepareRunsGridData = ({
 
     const groupedRuns = chunksWithSortedRuns.flat();
 
-    // If toggling individual runs in groups is enabled, hidden flags
-    // should be already contained in the array so we can return it right away
-    if (shouldEnableToggleIndividualRunsInGroups()) {
-      return groupedRuns;
-    }
-    return determineVisibleRuns(groupedRuns, runsHidden, runsHiddenMode, runsVisibilityMap);
+    return groupedRuns;
   }
 
   // If the flat structure is displayed, we can hoist pinned rows to the top
@@ -420,6 +417,7 @@ export const prepareRunsGridData = ({
 export const useExperimentRunRows = ({
   experiments,
   modelVersionsByRunUuid,
+  loggedModelsV3ByRunUuid,
   runsExpanded,
   nestChildren,
   referenceTime,
@@ -435,12 +433,14 @@ export const useExperimentRunRows = ({
   runsHiddenMode,
   groupsExpanded = {},
   useGroupedValuesInCharts,
+  searchFacetsState,
 }: PrepareRunsGridDataParams) =>
   useMemo(
     () =>
       prepareRunsGridData({
         experiments,
         modelVersionsByRunUuid,
+        loggedModelsV3ByRunUuid,
         runsExpanded,
         nestChildren,
         referenceTime,
@@ -456,11 +456,13 @@ export const useExperimentRunRows = ({
         groupsExpanded,
         runsHiddenMode,
         useGroupedValuesInCharts,
+        searchFacetsState,
       }),
     [
       // Explicitly include each dependency here to avoid unnecessary recalculations
       experiments,
       modelVersionsByRunUuid,
+      loggedModelsV3ByRunUuid,
       runsExpanded,
       nestChildren,
       referenceTime,
@@ -476,6 +478,7 @@ export const useExperimentRunRows = ({
       groupsExpanded,
       runsHiddenMode,
       useGroupedValuesInCharts,
+      searchFacetsState,
     ],
   );
 
@@ -485,11 +488,6 @@ const determineVisibleRuns = (
   runsHiddenMode: RUNS_VISIBILITY_MODE,
   runsVisibilityMap: Record<string, boolean> = {},
 ): RunRowType[] => {
-  // In the legacy version, just look into the runs hidden array
-  if (!shouldUseNewRunRowsVisibilityModel()) {
-    return runs.map((runRow) => ({ ...runRow, hidden: runsHidden.includes(runRow.runUuid) }));
-  }
-
   // In the new visibility model, we will count rows that can change visibility (groups and ungrouped runs)
   // and use the counter to limit the visible rows based on selected mode
   let visibleRowCounter = 0;
@@ -500,7 +498,14 @@ const determineVisibleRuns = (
 
     const rowWithHiddenFlag = {
       ...runRow,
-      hidden: determineIfRowIsHidden(runsHiddenMode, runsHidden, runUuidToToggle, visibleRowCounter, runsVisibilityMap),
+      hidden: determineIfRowIsHidden(
+        runsHiddenMode,
+        runsHidden,
+        runUuidToToggle,
+        visibleRowCounter,
+        runsVisibilityMap,
+        runRow.runStatus,
+      ),
     };
 
     const isGroupContainingRuns = runRow.groupParentInfo && !runRow.groupParentInfo.isRemainingRunsGroup;
@@ -553,6 +558,10 @@ type PrepareRunsGridDataParams = Pick<
     modelVersionsByRunUuid: Record<string, ModelVersionInfoEntity[]>;
 
     /**
+     * Logged models v3 data
+     */
+    loggedModelsV3ByRunUuid?: Record<string, LoggedModelProto[]>;
+    /**
      * Boolean flag indicating if hierarchical runs should be generated
      */
     nestChildren: boolean;
@@ -579,6 +588,8 @@ type PrepareRunsGridDataParams = Pick<
     runUuidsMatchingFilter: string[];
 
     groupBy: string | RunsGroupByConfig | null;
+
+    searchFacetsState?: Readonly<ExperimentPageSearchFacetsState>;
   };
 
 export const extractRunRowParamFloat = (run: RunRowType, paramName: string, fallback = undefined) => {
@@ -586,7 +597,9 @@ export const extractRunRowParamFloat = (run: RunRowType, paramName: string, fall
   if (!paramEntity) {
     return fallback;
   }
-  return parseFloat(paramEntity) || fallback;
+
+  const parsed = parseFloat(paramEntity);
+  return isNaN(parsed) ? fallback : parsed;
 };
 
 export const extractRunRowParamInteger = (run: RunRowType, paramName: string, fallback = undefined) => {
@@ -594,7 +607,9 @@ export const extractRunRowParamInteger = (run: RunRowType, paramName: string, fa
   if (!paramEntity) {
     return fallback;
   }
-  return parseInt(paramEntity, 10) || fallback;
+
+  const parsed = parseInt(paramEntity, 10);
+  return isNaN(parsed) ? fallback : parsed;
 };
 
 export const extractRunRowParam = (run: RunRowType, paramName: string, fallback = undefined) => {

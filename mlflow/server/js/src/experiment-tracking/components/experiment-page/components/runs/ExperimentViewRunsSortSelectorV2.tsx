@@ -142,7 +142,7 @@ const ExperimentViewRunsSortSelectorV2Body = ({
             key={sortOption.value}
             onClick={() => handleChange(sortOption.value)}
             checked={sortOption.value === orderByKey}
-            data-test-id={`sort-select-${sortOption.label}`}
+            data-testid={`sort-select-${sortOption.label}`}
             ref={index === 0 ? firstElementRef : undefined}
           >
             <DropdownMenu.ItemIndicator />
@@ -168,6 +168,7 @@ const ExperimentViewRunsSortSelectorV2Body = ({
 };
 
 export const ExperimentViewRunsSortSelectorV2 = React.memo(
+  // eslint-disable-next-line react-component-name/react-component-name -- TODO(FEINF-4716)
   ({
     metricKeys,
     paramKeys,
@@ -239,7 +240,6 @@ export const ExperimentViewRunsSortSelectorV2 = React.memo(
         // metrics.`metric_key_name` => metric_key_name
         const extractedKeyName = orderByKey.match(/^.+\.`(.+)`$/);
         if (extractedKeyName) {
-          // eslint-disable-next-line prefer-destructuring
           sortOptionLabel = extractedKeyName[1];
         }
       }
@@ -251,7 +251,7 @@ export const ExperimentViewRunsSortSelectorV2 = React.memo(
 
     return (
       <DropdownMenu.Root open={open} onOpenChange={setOpen} modal={false}>
-        <DropdownMenu.Trigger data-test-id="sort-select-dropdown" asChild>
+        <DropdownMenu.Trigger data-testid="sort-select-dropdown" asChild>
           <Button
             componentId="mlflow.experiment_page.sort_select_v2.toggle"
             icon={orderByAsc ? <SortAscendingIcon /> : <SortDescendingIcon />}

@@ -6,9 +6,13 @@ from typing import Generator
 
 from watchfiles import watch
 
-from mlflow.environment_variables import MLFLOW_GATEWAY_CONFIG
+from mlflow.environment_variables import (
+    MLFLOW_GATEWAY_CONFIG,
+    MLFLOW_GATEWAY_RESOLVE_API_KEY_FROM_ENV,
+    MLFLOW_GATEWAY_RESOLVE_API_KEY_FROM_FILE,
+)
 from mlflow.gateway import app
-from mlflow.gateway.config import _load_route_config
+from mlflow.gateway.config import _load_gateway_config
 from mlflow.gateway.utils import kill_child_processes
 
 _logger = logging.getLogger(__name__)
@@ -32,7 +36,7 @@ def monitor_config(config_path: str) -> Generator[None, None, None]:
             continue
 
         try:
-            _load_route_config(config_path)
+            _load_gateway_config(config_path)
         except Exception as e:
             _logger.warning("Invalid configuration: %s", e)
             continue
@@ -73,6 +77,8 @@ class Runner:
             env={
                 **os.environ,
                 MLFLOW_GATEWAY_CONFIG.name: self.config_path,
+                MLFLOW_GATEWAY_RESOLVE_API_KEY_FROM_ENV.name: "true",
+                MLFLOW_GATEWAY_RESOLVE_API_KEY_FROM_FILE.name: "true",
             },
         )
 

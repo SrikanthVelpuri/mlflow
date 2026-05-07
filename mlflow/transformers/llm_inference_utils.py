@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -65,7 +65,7 @@ _LLM_INFERENCE_TASK_TO_DATA_FIELD = {
 
 
 def infer_signature_from_llm_inference_task(
-    inference_task: str, signature: Optional[ModelSignature] = None
+    inference_task: str, signature: ModelSignature | None = None
 ) -> ModelSignature:
     """
     Infers the signature according to the MLflow inference task.
@@ -81,7 +81,7 @@ def infer_signature_from_llm_inference_task(
     return inferred_signature
 
 
-def convert_messages_to_prompt(messages: list[dict], tokenizer) -> str:
+def convert_messages_to_prompt(messages: list[dict[str, Any]], tokenizer) -> str:
     """For the Chat inference task, apply chat template to messages to create prompt.
 
     Args:
@@ -104,9 +104,9 @@ def convert_messages_to_prompt(messages: list[dict], tokenizer) -> str:
 
 
 def preprocess_llm_inference_input(
-    data: Union[pd.DataFrame, dict],
-    params: Optional[dict[str, Any]] = None,
-    flavor_config: Optional[dict[str, Any]] = None,
+    data: pd.DataFrame | dict[str, Any],
+    params: dict[str, Any] | None = None,
+    flavor_config: dict[str, Any] | None = None,
 ) -> tuple[list[Any], dict[str, Any]]:
     """
     When a MLflow inference task is given, return updated `data` and `params` that
@@ -150,7 +150,7 @@ def preprocess_llm_inference_input(
 
     # The rest of fields in input payload should goes to params and override default ones
     params_in_data = {k: v[0] for k, v in data.items() if v[0] is not None}
-    params = {**params, **params_in_data}
+    params = params | params_in_data
 
     if max_tokens := params.pop("max_tokens", None):
         params["max_new_tokens"] = max_tokens
@@ -162,7 +162,7 @@ def preprocess_llm_inference_input(
     return update_data, params
 
 
-def _get_stopping_criteria(stop: Optional[Union[str, list[str]]], model_name: Optional[str] = None):
+def _get_stopping_criteria(stop: str | list[str] | None, model_name: str | None = None):
     """Return a list of Hugging Face stopping criteria objects for the given stop sequences."""
     from transformers import AutoTokenizer, StoppingCriteria
 
@@ -177,7 +177,7 @@ def _get_stopping_criteria(stop: Optional[Union[str, list[str]]], model_name: Op
     tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
 
     def _get_slow_token_ids(seq: str):
-        return tokenizer.convert_tokens_to_ids(tokenizer._tokenize(seq))
+        return tokenizer.convert_tokens_to_ids(tokenizer.tokenize(seq))
 
     # NB: We need to define this as an inner class to avoid importing
     # transformers in the global scope that confuses autologging
@@ -257,14 +257,12 @@ def postprocess_output_for_llm_inference_task(
     Returns:
         List of dictionaries containing the output text and usage information for each input prompt.
     """
-    output_dicts = []
-    for input_data, output_tensor in zip(data, output_tensors):
-        output_dict = _get_output_and_usage_from_tensor(
+    return [
+        _get_output_and_usage_from_tensor(
             input_data, output_tensor, pipeline, flavor_config, model_config, inference_task
         )
-        output_dicts.append(output_dict)
-
-    return output_dicts
+        for input_data, output_tensor in zip(data, output_tensors)
+    ]
 
 
 def _get_output_and_usage_from_tensor(
@@ -313,8 +311,10 @@ def _get_completions_text(prompt: str, output_tensor: list[int], pipeline):
 
     # In order to correctly remove the prompt tokens from the decoded tokens,
     # we need to acquire the length of the prompt without special tokens
+    # NB: `pipeline.framework` was removed in transformers 5.x. Fall back to "pt" since
+    # MLflow only supports PyTorch for transformers pipelines.
     prompt_ids_without_special_tokens = pipeline.tokenizer(
-        prompt, return_tensors=pipeline.framework, add_special_tokens=False
+        prompt, return_tensors=getattr(pipeline, "framework", "pt"), add_special_tokens=False
     )["input_ids"][0]
 
     prompt_length = len(
@@ -332,7 +332,7 @@ def _get_token_usage(prompt: str, output_tensor: list[int], pipeline, model_conf
     """Return the prompt tokens, completion tokens, and the total tokens as dict."""
     inputs = pipeline.tokenizer(
         prompt,
-        return_tensors=pipeline.framework,
+        return_tensors=getattr(pipeline, "framework", "pt"),
         max_length=model_config.get("max_length", None),
         add_special_tokens=False,
     )
@@ -360,7 +360,7 @@ def _get_finish_reason(total_tokens: int, completion_tokens: int, model_config):
     return finish_reason
 
 
-def _get_default_task_for_llm_inference_task(llm_inference_task: Optional[str]) -> Optional[str]:
+def _get_default_task_for_llm_inference_task(llm_inference_task: str | None) -> str | None:
     """
     Get corresponding original Transformers task for the given LLM inference task.
 
@@ -374,7 +374,7 @@ def _get_default_task_for_llm_inference_task(llm_inference_task: Optional[str]) 
 
 
 def preprocess_llm_embedding_params(
-    data: Union[pd.DataFrame, dict[str, Any]],
+    data: pd.DataFrame | dict[str, Any],
 ) -> tuple[list[str], dict[str, Any]]:
     """
     When `llm/v1/embeddings` task is given, extract the input data (with "input" key) and

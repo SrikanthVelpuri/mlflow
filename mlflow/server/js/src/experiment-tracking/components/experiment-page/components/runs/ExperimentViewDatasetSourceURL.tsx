@@ -1,5 +1,6 @@
 import { Typography, useDesignSystemTheme } from '@databricks/design-system';
-import { DatasetSourceTypes, RunDatasetWithTags } from '../../../../types';
+import type { RunDatasetWithTags } from '../../../../types';
+import { DatasetSourceTypes } from '../../../../types';
 import { getDatasetSourceUrl } from '../../../../utils/DatasetUtils';
 
 export interface ExperimentViewDatasetSourceProps {
@@ -57,6 +58,27 @@ export const ExperimentViewDatasetSourceURL = ({ datasetWithTags }: ExperimentVi
             }}
           >
             S3 URI: {uri}
+          </Typography.Hint>
+        );
+      }
+    } catch {
+      return null;
+    }
+  }
+  if (sourceType === DatasetSourceTypes.LOCAL) {
+    try {
+      const { uri } = JSON.parse(dataset.source);
+      if (uri) {
+        return (
+          <Typography.Hint
+            title={uri}
+            css={{
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            Path: {uri}
           </Typography.Hint>
         );
       }

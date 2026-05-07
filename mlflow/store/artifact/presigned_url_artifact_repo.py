@@ -3,6 +3,8 @@ import os
 import posixpath
 
 from mlflow.entities import FileInfo
+from mlflow.environment_variables import MLFLOW_MULTIPART_DOWNLOAD_CHUNK_SIZE
+from mlflow.exceptions import RestException
 from mlflow.protos.databricks_artifacts_pb2 import ArtifactCredentialInfo
 from mlflow.protos.databricks_filesystem_service_pb2 import (
     CreateDownloadUrlRequest,
@@ -12,6 +14,7 @@ from mlflow.protos.databricks_filesystem_service_pb2 import (
     FilesystemService,
     ListDirectoryResponse,
 )
+from mlflow.protos.databricks_pb2 import NOT_FOUND, ErrorCode
 from mlflow.store.artifact.artifact_repo import _retry_with_new_creds
 from mlflow.store.artifact.cloud_artifact_repo import CloudArtifactRepository
 from mlflow.utils.file_utils import download_file_using_http_uri
@@ -32,11 +35,18 @@ class PresignedUrlArtifactRepository(CloudArtifactRepository):
     Stores and retrieves model artifacts using presigned URLs.
     """
 
-    def __init__(self, db_creds, model_full_name, model_version):
+    def __init__(
+        self,
+        db_creds,
+        model_full_name,
+        model_version,
+        tracking_uri: str | None = None,
+        registry_uri: str | None = None,
+    ):
         artifact_uri = posixpath.join(
             "/Models", model_full_name.replace(".", "/"), str(model_version)
         )
-        super().__init__(artifact_uri)
+        super().__init__(artifact_uri, tracking_uri, registry_uri)
         self.db_creds = db_creds
 
     def log_artifact(self, local_file, artifact_path=None):
@@ -101,13 +111,23 @@ class PresignedUrlArtifactRepository(CloudArtifactRepository):
             req_body = json.dumps({"page_token": page_token}) if page_token else None
 
             response_proto = ListDirectoryResponse()
-            resp = call_endpoint(
-                host_creds=self.db_creds,
-                endpoint=endpoint,
-                method="GET",
-                json_body=req_body,
-                response_proto=response_proto,
-            )
+
+            # If the path specified is not a directory, we return an empty list instead of raising
+            # an exception. This is due to this method being used in artifact_repo._is_directory
+            # to determine when a filepath is a directory.
+            try:
+                resp = call_endpoint(
+                    host_creds=self.db_creds,
+                    endpoint=endpoint,
+                    method="GET",
+                    json_body=req_body,
+                    response_proto=response_proto,
+                )
+            except RestException as e:
+                if e.error_code == ErrorCode.Name(NOT_FOUND):
+                    return []
+                else:
+                    raise e
             for dir_entry in resp.contents:
                 rel_path = posixpath.relpath(dir_entry.path, self.artifact_uri)
                 if dir_entry.is_directory:
@@ -138,7 +158,10 @@ class PresignedUrlArtifactRepository(CloudArtifactRepository):
             presigned_url = creds.url
             headers = {header.name: header.value for header in creds.headers}
             download_file_using_http_uri(
-                http_uri=presigned_url, download_path=local_path, headers=headers
+                http_uri=presigned_url,
+                download_path=local_path,
+                chunk_size=MLFLOW_MULTIPART_DOWNLOAD_CHUNK_SIZE.get(),
+                headers=headers,
             )
 
         _retry_with_new_creds(try_func=try_func, creds_func=creds_func)

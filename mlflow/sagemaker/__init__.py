@@ -5,19 +5,18 @@ The ``mlflow.sagemaker`` module provides an API for deploying MLflow models to A
 import json
 import logging
 import os
-import platform
 import signal
+import subprocess
 import sys
 import tarfile
 import time
 import urllib.parse
 import uuid
-from subprocess import Popen
-from typing import Any, Optional
+from typing import Any
 
 import mlflow
 import mlflow.version
-from mlflow import mleap, pyfunc
+from mlflow import pyfunc
 from mlflow.deployments import BaseDeploymentClient, PredictionsResponse
 from mlflow.environment_variables import (
     MLFLOW_DEPLOYMENT_FLAVOR_NAME,
@@ -70,9 +69,7 @@ def _get_preferred_deployment_flavor(model_config):
     Returns:
         The name of the preferred deployment flavor for the specified model
     """
-    if mleap.FLAVOR_NAME in model_config.flavors:
-        return mleap.FLAVOR_NAME
-    elif pyfunc.FLAVOR_NAME in model_config.flavors:
+    if pyfunc.FLAVOR_NAME in model_config.flavors:
         return pyfunc.FLAVOR_NAME
     else:
         raise MlflowException(
@@ -144,29 +141,34 @@ def push_image_to_ecr(image=DEFAULT_IMAGE_NAME):
     except ecr_client.exceptions.RepositoryNotFoundException:
         ecr_client.create_repository(repositoryName=image)
         _logger.info("Created new ECR repository: %s", image)
-    # TODO: it would be nice to translate the docker login, tag and push to python api.
-    # x = ecr_client.get_authorization_token()['authorizationData'][0]
-    # docker_login_cmd = "docker login -u AWS -p {token} {url}".format(token=x['authorizationToken']
-    #                                                                ,url=x['proxyEndpoint'])
+    registry = f"{account}.dkr.ecr.{region}.amazonaws.com"
 
-    docker_login_cmd = (
-        "aws ecr get-login-password"
-        " | docker login  --username AWS "
-        "--password-stdin "
-        f"{account}.dkr.ecr.{region}.amazonaws.com"
-    )
+    try:
+        # Docker login: get password from AWS CLI and pipe to docker login
+        _logger.info("Logging in to ECR registry: %s", registry)
+        aws_result = subprocess.run(
+            ["aws", "ecr", "get-login-password"],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["docker", "login", "--username", "AWS", "--password-stdin", registry],
+            input=aws_result.stdout,
+            check=True,
+        )
 
-    os_command_separator = ";\n"
-    if platform.system() == "Windows":
-        os_command_separator = " && "
+        # Docker tag
+        _logger.info("Tagging image %s as %s", image, fullname)
+        subprocess.check_call(["docker", "tag", image, fullname])
 
-    docker_tag_cmd = f"docker tag {image} {fullname}"
-    docker_push_cmd = f"docker push {fullname}"
-
-    cmd = os_command_separator.join([docker_login_cmd, docker_tag_cmd, docker_push_cmd])
-
-    _logger.info("Executing: %s", cmd)
-    os.system(cmd)
+        # Docker push
+        _logger.info("Pushing image %s", fullname)
+        subprocess.check_call(["docker", "push", fullname])
+    except subprocess.CalledProcessError as e:
+        cmd = " ".join(e.cmd)
+        raise MlflowException(
+            f"Failed to push image to ECR. Command '{cmd}' failed with exit code {e.returncode}"
+        ) from e
 
 
 def _deploy(
@@ -198,7 +200,7 @@ def _deploy(
 
     This function creates a SageMaker endpoint. For more information about the input data
     formats accepted by this endpoint, see the
-    :ref:`MLflow deployment tools documentation <sagemaker_deployment>`.
+    `MLflow deployment tools documentation <../../deployment/deploy-model-to-sagemaker.html>`_.
 
     Args:
         app_name: Name of the deployed application.
@@ -289,7 +291,7 @@ def _deploy(
                             "subnet-123456abc",
                         ],
                     }
-                    mfs.deploy(..., vpc_config=vpc_config)
+                    mfs._deploy(..., vpc_config=vpc_config)
 
         flavor: The name of the flavor of the model to use for deployment. Must be either
             ``None`` or one of mlflow.sagemaker.SUPPORTED_DEPLOYMENT_FLAVORS. If ``None``,
@@ -324,7 +326,7 @@ def _deploy(
                     "DestinationS3Uri": "s3://my-bucket/path",
                     "CaptureOptions": [{"CaptureMode": "Output"}],
                 }
-                mfs.deploy(..., data_capture_config=data_capture_config)
+                mfs._deploy(..., data_capture_config=data_capture_config)
 
         variant_name: The name to assign to the new production variant.
         async_inference_config: The name to assign to the endpoint_config
@@ -1161,7 +1163,7 @@ def run_local(name, model_uri, flavor=None, config=None):
         cmd += ["-e", f"{key}={value}"]
     cmd += ["--rm", image, "serve"]
     _logger.info("executing: %s", " ".join(cmd))
-    proc = Popen(cmd, stdout=sys.stdout, stderr=sys.stderr, text=True)
+    proc = subprocess.Popen(cmd, stdout=sys.stdout, stderr=sys.stderr, text=True)
 
     def _sigterm_handler(*_):
         _logger.info("received termination signal => killing docker process")
@@ -1307,7 +1309,7 @@ def _make_tarfile(output_filename, source_dir):
             tar.add(os.path.join(source_dir, f), arcname=f)
 
 
-def _upload_s3(local_model_path, bucket, prefix, region_name, s3_client, **assume_role_credentials):  # noqa: D417
+def _upload_s3(local_model_path, bucket, prefix, region_name, s3_client, **assume_role_credentials):
     """
     Upload dir to S3 as .tar.gz.
 
@@ -1350,13 +1352,13 @@ def _get_deployment_config(flavor_name, env_override=None):
     if env_override:
         deployment_config.update(env_override)
 
-    if os.getenv("http_proxy") is not None:
+    if os.environ.get("http_proxy") is not None:
         deployment_config.update({"http_proxy": os.environ["http_proxy"]})
 
-    if os.getenv("https_proxy") is not None:
+    if os.environ.get("https_proxy") is not None:
         deployment_config.update({"https_proxy": os.environ["https_proxy"]})
 
-    if os.getenv("no_proxy") is not None:
+    if os.environ.get("no_proxy") is not None:
         deployment_config.update({"no_proxy": os.environ["no_proxy"]})
 
     return deployment_config
@@ -1407,7 +1409,7 @@ def _get_sagemaker_config_tags(endpoint_name):
 
 def _prepare_sagemaker_tags(
     config_tags: list[dict[str, str]],
-    sagemaker_tags: Optional[dict[str, str]] = None,
+    sagemaker_tags: dict[str, str] | None = None,
 ):
     if not sagemaker_tags:
         return config_tags
@@ -1564,7 +1566,7 @@ def _create_sagemaker_transform_job(
     return _SageMakerOperation(status_check_fn=status_check_fn, cleanup_fn=cleanup_fn)
 
 
-def _create_sagemaker_endpoint(  # noqa: D417
+def _create_sagemaker_endpoint(
     endpoint_name,
     model_name,
     model_s3_path,
@@ -1689,7 +1691,7 @@ def _create_sagemaker_endpoint(  # noqa: D417
     return _SageMakerOperation(status_check_fn=status_check_fn, cleanup_fn=cleanup_fn)
 
 
-def _update_sagemaker_endpoint(  # noqa: D417
+def _update_sagemaker_endpoint(
     endpoint_name,
     model_name,
     model_uri,
@@ -1907,7 +1909,7 @@ def _create_sagemaker_model(
     return sage_client.create_model(**create_model_args)
 
 
-def _delete_sagemaker_model(model_name, sage_client, s3_client):  # noqa: D417
+def _delete_sagemaker_model(model_name, sage_client, s3_client):
     """
     Args:
         sage_client: A boto3 client for SageMaker.
@@ -1933,7 +1935,7 @@ def _delete_sagemaker_model(model_name, sage_client, s3_client):  # noqa: D417
     return model_arn
 
 
-def _delete_sagemaker_endpoint_configuration(endpoint_config_name, sage_client):  # noqa: D417
+def _delete_sagemaker_endpoint_configuration(endpoint_config_name, sage_client):
     """
     Args:
         sage_client: A boto3 client for SageMaker.
@@ -1948,7 +1950,7 @@ def _delete_sagemaker_endpoint_configuration(endpoint_config_name, sage_client):
     return endpoint_config_info["EndpointConfigArn"]
 
 
-def _find_endpoint(endpoint_name, sage_client):  # noqa: D417
+def _find_endpoint(endpoint_name, sage_client):
     """
     Finds a SageMaker endpoint with the specified name in the caller's AWS account, returning a
     NoneType if the endpoint is not found.
@@ -1975,7 +1977,7 @@ def _find_endpoint(endpoint_name, sage_client):  # noqa: D417
             return None
 
 
-def _find_transform_job(job_name, sage_client):  # noqa: D417
+def _find_transform_job(job_name, sage_client):
     """
     Finds a SageMaker batch transform job with the specified name in the caller's AWS account,
     returning a NoneType if the transform job is not found.
@@ -2004,7 +2006,7 @@ def _find_transform_job(job_name, sage_client):  # noqa: D417
             return None
 
 
-def _does_model_exist(model_name, sage_client):  # noqa: D417
+def _does_model_exist(model_name, sage_client):
     """
     Determines whether a SageMaker model exists with the specified name in the caller's AWS account,
     returning True if the model exists, returning False if the model does not exist.
@@ -2152,7 +2154,7 @@ class SageMakerDeploymentClient(BaseDeploymentClient):
 
         This function creates a SageMaker endpoint. For more information about the input data
         formats accepted by this endpoint, see the
-        :ref:`MLflow deployment tools documentation <sagemaker_deployment>`.
+        `MLflow deployment tools documentation <../../deployment/deploy-model-to-sagemaker.html>`_.
 
         Args:
             name: Name of the deployed application.
@@ -2799,7 +2801,7 @@ class SageMakerDeploymentClient(BaseDeploymentClient):
         deployment_name=None,
         inputs=None,
         endpoint=None,
-        params: Optional[dict[str, Any]] = None,
+        params: dict[str, Any] | None = None,
     ):
         """
         Compute predictions from the specified deployment using the provided PyFunc input.

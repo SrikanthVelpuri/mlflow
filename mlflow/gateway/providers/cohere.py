@@ -1,8 +1,9 @@
 import json
 import time
+import warnings
 from typing import Any, AsyncGenerator, AsyncIterable
 
-from mlflow.gateway.config import CohereConfig, RouteConfig
+from mlflow.gateway.config import CohereConfig, EndpointConfig
 from mlflow.gateway.exceptions import AIGatewayException
 from mlflow.gateway.providers.base import BaseProvider, ProviderAdapter
 from mlflow.gateway.providers.utils import rename_payload_keys, send_request, send_stream_request
@@ -94,10 +95,7 @@ class CohereAdapter(ProviderAdapter):
                 completions.StreamChoice(
                     index=resp.get("index", 0),
                     finish_reason=resp.get("finish_reason"),
-                    delta=completions.StreamDelta(
-                        role=None,
-                        content=resp.get("text"),
-                    ),
+                    text=resp.get("text"),
                 )
             ],
             usage=completions.CompletionsUsage(
@@ -194,7 +192,7 @@ class CohereAdapter(ProviderAdapter):
         payload = cls._scale_temperature(payload)
 
         messages = payload.pop("messages")
-        last_message = messages.pop()  # pydantic enforces min_items=1
+        last_message = messages.pop()  # pydantic enforces min_length=1
         if last_message["role"] != "user":
             raise AIGatewayException(
                 status_code=422,
@@ -210,8 +208,7 @@ class CohereAdapter(ProviderAdapter):
 
         # remaining messages are chat history
         # we want to include only user and assistant messages
-        messages = [m for m in messages if m["role"] in ("user", "assistant")]
-        if messages:
+        if messages := [m for m in messages if m["role"] in ("user", "assistant")]:
             payload["chat_history"] = [
                 {
                     "role": "USER" if m["role"] == "user" else "CHATBOT",
@@ -326,11 +323,16 @@ class CohereAdapter(ProviderAdapter):
 
 
 class CohereProvider(BaseProvider):
-    NAME = "Cohere"
+    DISPLAY_NAME = "Cohere"
     CONFIG_TYPE = CohereConfig
 
-    def __init__(self, config: RouteConfig) -> None:
-        super().__init__(config)
+    def __init__(self, config: EndpointConfig, enable_tracing: bool = False) -> None:
+        super().__init__(config, enable_tracing=enable_tracing)
+        warnings.warn(
+            "Cohere provider is deprecated and will be removed in a future MLflow version.",
+            category=FutureWarning,
+            stacklevel=2,
+        )
         if config.model.config is None or not isinstance(config.model.config, CohereConfig):
             raise TypeError(f"Unexpected config type {config.model.config}")
         self.cohere_config: CohereConfig = config.model.config
@@ -373,7 +375,7 @@ class CohereProvider(BaseProvider):
             payload=payload,
         )
 
-    async def chat_stream(
+    async def _chat_stream(
         self, payload: chat.RequestPayload
     ) -> AsyncIterable[chat.StreamResponsePayload]:
         from fastapi.encoders import jsonable_encoder
@@ -396,7 +398,7 @@ class CohereProvider(BaseProvider):
                 continue
             yield CohereAdapter.model_to_chat_streaming(resp, self.config)
 
-    async def chat(self, payload: chat.RequestPayload) -> chat.ResponsePayload:
+    async def _chat(self, payload: chat.RequestPayload) -> chat.ResponsePayload:
         from fastapi.encoders import jsonable_encoder
 
         payload = jsonable_encoder(payload, exclude_none=True)
@@ -410,7 +412,7 @@ class CohereProvider(BaseProvider):
         )
         return CohereAdapter.model_to_chat(resp, self.config)
 
-    async def completions_stream(
+    async def _completions_stream(
         self, payload: completions.RequestPayload
     ) -> AsyncIterable[completions.StreamResponsePayload]:
         from fastapi.encoders import jsonable_encoder
@@ -431,7 +433,9 @@ class CohereProvider(BaseProvider):
             resp = json.loads(chunk)
             yield CohereAdapter.model_to_completions_streaming(resp, self.config)
 
-    async def completions(self, payload: completions.RequestPayload) -> completions.ResponsePayload:
+    async def _completions(
+        self, payload: completions.RequestPayload
+    ) -> completions.ResponsePayload:
         from fastapi.encoders import jsonable_encoder
 
         payload = jsonable_encoder(payload, exclude_none=True)
@@ -445,7 +449,7 @@ class CohereProvider(BaseProvider):
         )
         return CohereAdapter.model_to_completions(resp, self.config)
 
-    async def embeddings(self, payload: embeddings.RequestPayload) -> embeddings.ResponsePayload:
+    async def _embeddings(self, payload: embeddings.RequestPayload) -> embeddings.ResponsePayload:
         from fastapi.encoders import jsonable_encoder
 
         payload = jsonable_encoder(payload, exclude_none=True)

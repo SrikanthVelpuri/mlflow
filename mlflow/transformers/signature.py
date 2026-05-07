@@ -7,7 +7,6 @@ from mlflow.environment_variables import MLFLOW_INPUT_EXAMPLE_INFERENCE_TIMEOUT
 from mlflow.models.signature import ModelSignature, infer_signature
 from mlflow.models.utils import _contains_params
 from mlflow.types.schema import ColSpec, DataType, Schema, TensorSpec
-from mlflow.utils.annotations import deprecated
 from mlflow.utils.os import is_windows
 from mlflow.utils.timeout import MlflowTimeoutError, run_with_timeout
 
@@ -35,20 +34,16 @@ _DEFAULT_SIGNATURE_FOR_TASK = {
     "summarization": _TEXT2TEXT_SIGNATURE,
     "image-classification": _CLASSIFICATION_SIGNATURE,
     "zero-shot-classification": ModelSignature(
-        inputs=Schema(
-            [
-                ColSpec(DataType.string, name="sequences"),
-                ColSpec(DataType.string, name="candidate_labels"),
-                ColSpec(DataType.string, name="hypothesis_template"),
-            ]
-        ),
-        outputs=Schema(
-            [
-                ColSpec(DataType.string, name="sequence"),
-                ColSpec(DataType.string, name="labels"),
-                ColSpec(DataType.double, name="scores"),
-            ]
-        ),
+        inputs=Schema([
+            ColSpec(DataType.string, name="sequences"),
+            ColSpec(DataType.string, name="candidate_labels"),
+            ColSpec(DataType.string, name="hypothesis_template"),
+        ]),
+        outputs=Schema([
+            ColSpec(DataType.string, name="sequence"),
+            ColSpec(DataType.string, name="labels"),
+            ColSpec(DataType.double, name="scores"),
+        ]),
     ),
     "automatic-speech-recognition": ModelSignature(
         inputs=Schema([ColSpec(DataType.binary)]),
@@ -56,20 +51,23 @@ _DEFAULT_SIGNATURE_FOR_TASK = {
     ),
     "audio-classification": ModelSignature(
         inputs=Schema([ColSpec(DataType.binary)]),
-        outputs=Schema(
-            [ColSpec(DataType.double, name="score"), ColSpec(DataType.string, name="label")]
-        ),
+        outputs=Schema([
+            ColSpec(DataType.double, name="score"),
+            ColSpec(DataType.string, name="label"),
+        ]),
     ),
     "table-question-answering": ModelSignature(
-        inputs=Schema(
-            [ColSpec(DataType.string, name="query"), ColSpec(DataType.string, name="table")]
-        ),
+        inputs=Schema([
+            ColSpec(DataType.string, name="query"),
+            ColSpec(DataType.string, name="table"),
+        ]),
         outputs=Schema([ColSpec(DataType.string)]),
     ),
     "question-answering": ModelSignature(
-        inputs=Schema(
-            [ColSpec(DataType.string, name="question"), ColSpec(DataType.string, name="context")]
-        ),
+        inputs=Schema([
+            ColSpec(DataType.string, name="question"),
+            ColSpec(DataType.string, name="context"),
+        ]),
         outputs=Schema([ColSpec(DataType.string)]),
     ),
     "feature-extraction": ModelSignature(
@@ -174,9 +172,6 @@ def format_input_example_for_special_cases(input_example, pipeline):
     return input_data if not isinstance(input_example, tuple) else (input_data, input_example[1])
 
 
-@deprecated(
-    alternative="the `input_example` parameter in mlflow.transformers.log_model", since="2.19.0"
-)
 def generate_signature_output(pipeline, data, model_config=None, flavor_config=None, params=None):
     # Lazy import to avoid circular dependencies. Ideally we should move _TransformersWrapper
     # out from __init__.py to avoid this.

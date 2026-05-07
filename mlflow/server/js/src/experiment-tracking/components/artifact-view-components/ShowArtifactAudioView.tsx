@@ -18,52 +18,74 @@ export type ShowArtifactAudioViewProps = {
 
 const ShowArtifactAudioView = ({ runUuid, path, getArtifact = getArtifactBlob }: ShowArtifactAudioViewProps) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const [waveSurfer, setWaveSurfer] = useState<WaveSurfer | null>(null);
+  const wsRef = useRef<WaveSurfer | null>(null);
 
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
-  const [audioData, setAudioData] = useState<any>(null);
-
-  useEffect(() => {
-    const fetchAudio = async () => {
-      setLoading(true);
-      try {
-        const artifactLocation = getArtifactLocationUrl(path, runUuid);
-        const artifactAudioData = await getArtifact(artifactLocation);
-        setAudioData({ data: artifactAudioData });
-      } catch (error) {
-        setError(error as Error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchAudio();
-  }, [runUuid, path, getArtifact]);
+  const [error, setError] = useState<boolean>(false);
 
   useEffect(() => {
     if (!containerRef.current) return;
-    const ws = WaveSurfer.create({
-      mediaControls: true,
-      container: containerRef.current,
-      ...waveSurferStyling,
-    });
-    setWaveSurfer(ws);
+
+    setLoading(true);
+    setError(false);
+
+    let blobUrl: string | undefined;
+    let cancelled = false;
+
+    const artifactUrl = getArtifactLocationUrl(path, runUuid);
+    getArtifact(artifactUrl)
+      .then((blob: Blob) => {
+        if (cancelled || !containerRef.current) return;
+
+        blobUrl = URL.createObjectURL(blob);
+
+        const ws = WaveSurfer.create({
+          mediaControls: true,
+          container: containerRef.current,
+          ...waveSurferStyling,
+          url: blobUrl,
+        });
+
+        ws.on('ready', () => {
+          setLoading(false);
+        });
+
+        ws.on('error', () => {
+          setLoading(false);
+          setError(true);
+          ws.destroy();
+          wsRef.current = null;
+          if (blobUrl) {
+            URL.revokeObjectURL(blobUrl);
+            blobUrl = undefined;
+          }
+        });
+
+        wsRef.current = ws;
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setLoading(false);
+          setError(true);
+        }
+      });
 
     return () => {
-      ws.destroy();
+      cancelled = true;
+      if (wsRef.current) {
+        wsRef.current.destroy();
+        wsRef.current = null;
+      }
+      if (blobUrl) {
+        URL.revokeObjectURL(blobUrl);
+      }
     };
-  }, [containerRef]);
-
-  useEffect(() => {
-    if (audioData && waveSurfer) {
-      waveSurfer.loadBlob(audioData.data);
-    }
-  }, [audioData, waveSurfer]);
+  }, [containerRef, path, runUuid, getArtifact]);
 
   const showLoading = loading && !error;
+
   return (
-    <>
+    <div data-testid="audio-artifact-preview">
       {showLoading && <ArtifactViewSkeleton />}
       {error && <ArtifactViewErrorState />}
       {/* This div is always rendered, but its visibility is controlled by the loading and error states */}
@@ -75,7 +97,7 @@ const ShowArtifactAudioView = ({ runUuid, path, getArtifact = getArtifactBlob }:
       >
         <div ref={containerRef} />
       </div>
-    </>
+    </div>
   );
 };
 

@@ -1,7 +1,7 @@
 import os
 import time
 from enum import Enum
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 
 import mlflow
 
@@ -93,7 +93,7 @@ class _OAITokenHolder:
     def refresh(self, logger=None):
         """Validates the token or API key configured for accessing the OpenAI resource."""
 
-        if self._api_token_env:
+        if self._api_token_env is not None:
             return
 
         if self._is_azure_ad:
@@ -128,10 +128,10 @@ class _OpenAIApiConfig(NamedTuple):
     batch_size: int
     max_requests_per_minute: int
     max_tokens_per_minute: int
-    api_version: Optional[str]
+    api_version: str | None
     api_base: str
-    deployment_id: Optional[str]
-    organization: Optional[str] = None
+    deployment_id: str | None
+    organization: str | None = None
     max_retries: int = 5
     timeout: float = 60.0
 
@@ -159,6 +159,6 @@ class _OpenAIEnvVar(str, Enum):
     def read_environ(cls):
         env_vars = {}
         for e in _OpenAIEnvVar:
-            if value := os.getenv(e.value):
+            if value := os.environ.get(e.value):
                 env_vars[e.value] = value
         return env_vars

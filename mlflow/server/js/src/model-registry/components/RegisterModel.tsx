@@ -6,8 +6,9 @@
  */
 
 import React from 'react';
-import _, { identity } from 'lodash';
-import { Button, ButtonProps, Modal, Spacer, LegacyTooltip, Typography } from '@databricks/design-system';
+import { identity, isUndefined, debounce } from 'lodash';
+import type { ButtonProps } from '@databricks/design-system';
+import { Button, Modal, Spacer, Typography } from '@databricks/design-system';
 import { FormattedMessage, injectIntl, type IntlShape } from 'react-intl';
 import {
   CREATE_NEW_MODEL_OPTION_VALUE,
@@ -30,9 +31,10 @@ const MAX_SEARCH_REGISTERED_MODELS = 5;
 
 type RegisterModelImplProps = {
   disabled: boolean;
-  runUuid: string;
+  runUuid?: string;
+  loggedModelId?: string;
   modelPath: string;
-  modelRelativePath: string;
+  modelRelativePath?: string;
   modelByName: any;
   createRegisteredModelApi: (...args: any[]) => any;
   createModelVersionApi: (...args: any[]) => any;
@@ -43,10 +45,6 @@ type RegisterModelImplProps = {
    * Type of button to display ("primary", "link", etc.)
    */
   buttonType?: ButtonProps['type'];
-  /**
-   * Tooltip to display on hover
-   */
-  tooltip?: React.ReactNode;
   /**
    * Whether to show the button. If set to true, only modal will be used and button will not be shown.
    */
@@ -116,7 +114,9 @@ export class RegisterModelImpl extends React.Component<RegisterModelImplProps, R
   };
 
   handleSearchRegisteredModels = (input: any) => {
-    this.props.searchRegisteredModelsApi(getModelNameFilter(input), MAX_SEARCH_REGISTERED_MODELS);
+    if (this.isWorkspaceModelRegistryEnabled) {
+      this.props.searchRegisteredModelsApi(getModelNameFilter(input), MAX_SEARCH_REGISTERED_MODELS);
+    }
   };
 
   reloadModelVersionsForCurrentRun = () => {
@@ -127,7 +127,22 @@ export class RegisterModelImpl extends React.Component<RegisterModelImplProps, R
   handleRegisterModel = () => {
     return this.form.current.validateFields().then((values: any) => {
       this.setState({ confirmLoading: true });
-      const { runUuid, modelPath } = this.props;
+      const { runUuid, modelPath, modelRelativePath, loggedModelId } = this.props;
+
+      const getModelSourceUri = () => {
+        // Construct source URI to maintain connection to source run:
+        // 1. For logged models (MLflow 3.0+), use models:/{model_id} format
+        // 2. For regular artifacts with run context, use runs:/<run_id>/<model_path> format
+        // 3. Otherwise, fall back to the absolute artifact URI for backward compatibility
+        let sourceUri = modelPath;
+        if (loggedModelId) {
+          sourceUri = `models:/${loggedModelId}`;
+        } else if (modelRelativePath && runUuid) {
+          sourceUri = `runs:/${runUuid}/${modelRelativePath}`;
+        }
+        return sourceUri;
+      };
+
       const selectedModelName = values[SELECTED_MODEL_FIELD];
       if (selectedModelName === CREATE_NEW_MODEL_OPTION_VALUE) {
         // When user choose to create a new registered model during the registration, we need to
@@ -138,10 +153,11 @@ export class RegisterModelImpl extends React.Component<RegisterModelImplProps, R
           .then(() =>
             this.props.createModelVersionApi(
               values[MODEL_NAME_FIELD],
-              modelPath,
+              getModelSourceUri(),
               runUuid,
               [],
               this.createModelVersionRequestId,
+              this.props.loggedModelId,
             ),
           )
           .then(this.props.onRegisterSuccess ?? identity)
@@ -151,7 +167,14 @@ export class RegisterModelImpl extends React.Component<RegisterModelImplProps, R
           .catch(Utils.logErrorAndNotifyUser);
       } else {
         return this.props
-          .createModelVersionApi(selectedModelName, modelPath, runUuid, [], this.createModelVersionRequestId)
+          .createModelVersionApi(
+            selectedModelName,
+            getModelSourceUri(),
+            runUuid,
+            [],
+            this.createModelVersionRequestId,
+            this.props.loggedModelId,
+          )
           .then(this.props.onRegisterSuccess ?? identity)
           .then(this.resetAndClearModalForm)
           .catch(this.props.onRegisterFailure ?? this.handleRegistrationFailure)
@@ -161,24 +184,29 @@ export class RegisterModelImpl extends React.Component<RegisterModelImplProps, R
     });
   };
 
-  componentDidMount() {
-    this.props.searchRegisteredModelsApi();
+  get isWorkspaceModelRegistryEnabled() {
+    return true;
   }
 
-  componentDidUpdate(prevProps: RegisterModelImplProps, prevState: RegisterModelImplState) {
-    // Repopulate registered model list every time user launch the modal
-    if (prevState.visible === false && this.state.visible === true) {
+  componentDidMount() {
+    if (this.isWorkspaceModelRegistryEnabled) {
       this.props.searchRegisteredModelsApi();
     }
   }
 
+  componentDidUpdate(prevProps: RegisterModelImplProps, prevState: RegisterModelImplState) {
+    // Repopulate registered model list every time user launch the modal
+    if (prevState.visible === false && this.state.visible === true && this.isWorkspaceModelRegistryEnabled) {
+      this.props.searchRegisteredModelsApi();
+    }
+  }
   renderRegisterModelForm() {
     const { modelByName } = this.props;
     return (
       <RegisterModelForm
         modelByName={modelByName}
         innerRef={this.form}
-        onSearchRegisteredModels={_.debounce(this.handleSearchRegisteredModels, 300)}
+        onSearchRegisteredModels={debounce(this.handleSearchRegisteredModels, 300)}
       />
     );
   }
@@ -200,7 +228,7 @@ export class RegisterModelImpl extends React.Component<RegisterModelImplProps, R
         key="submit"
         type="primary"
         onClick={() => this.handleRegisterModel()}
-        data-test-id="confirm-register-model"
+        data-testid="confirm-register-model"
       >
         <FormattedMessage defaultMessage="Register" description="Register button text to register the model" />
       </Button>,
@@ -213,21 +241,19 @@ export class RegisterModelImpl extends React.Component<RegisterModelImplProps, R
     return (
       <div className="register-model-btn-wrapper">
         {showButton && (
-          <LegacyTooltip title={this.props.tooltip || null} placement="left">
-            <Button
-              componentId="codegen_mlflow_app_src_model-registry_components_registermodel.tsx_261"
-              className="register-model-btn"
-              type={buttonType}
-              onClick={this.showRegisterModal}
-              disabled={disableButton}
-              htmlType="button"
-            >
-              <FormattedMessage
-                defaultMessage="Register model"
-                description="Button text to register the model for deployment"
-              />
-            </Button>
-          </LegacyTooltip>
+          <Button
+            componentId="codegen_mlflow_app_src_model-registry_components_registermodel.tsx_261"
+            className="register-model-btn"
+            type={buttonType}
+            onClick={this.showRegisterModal}
+            disabled={disableButton}
+            htmlType="button"
+          >
+            <FormattedMessage
+              defaultMessage="Register model"
+              description="Button text to register the model for deployment"
+            />
+          </Button>
         )}
         <Modal
           title={this.props.intl.formatMessage({

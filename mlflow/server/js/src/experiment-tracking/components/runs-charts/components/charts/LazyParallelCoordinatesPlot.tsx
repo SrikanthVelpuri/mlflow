@@ -1,13 +1,13 @@
 import { LegacySkeleton } from '@databricks/design-system';
-import React, { Suspense } from 'react';
+import React from 'react';
 
 const ParallelCoordinatesPlot = React.lazy(() => import('./ParallelCoordinatesPlot'));
 
-const LazyParallelCoordinatesPlot = (props: any) => {
+const LazyParallelCoordinatesPlot = ({ fallback, ...props }: any) => {
   return (
-    <Suspense fallback={<LegacySkeleton />}>
-      <ParallelCoordinatesPlot {...props}></ParallelCoordinatesPlot>
-    </Suspense>
+    <React.Suspense fallback={fallback ?? <LegacySkeleton />}>
+      <ParallelCoordinatesPlot {...props} />
+    </React.Suspense>
   );
 };
 

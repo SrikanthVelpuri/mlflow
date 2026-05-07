@@ -1,4 +1,4 @@
-name: Publish Architecture Docs
+name: Publish Architecture Docs to GitHub Pages
 
 on:
   push:
@@ -14,32 +14,39 @@ permissions:
   id-token: write
 
 concurrency:
-  group: "pages"
+  group: pages
   cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: architecture-docs
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: ruby/setup-ruby@v1
+      - name: Setup Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.2"
           bundler-cache: true
           working-directory: architecture-docs
 
-      - uses: actions/configure-pages@v5
-
-      - name: Build site
+      - name: Build with Jekyll
+        working-directory: architecture-docs
         env:
           JEKYLL_ENV: production
-        run: bundle exec jekyll build --baseurl "/mlflow"
+        run: |
+          bundle exec jekyll build \
+            --source . \
+            --destination ./_site \
+            --baseurl "${{ steps.pages.outputs.base_path }}"
 
-      - uses: actions/upload-pages-artifact@v3
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
         with:
           path: architecture-docs/_site
 
@@ -50,5 +57,6 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - id: deployment
+      - name: Deploy to GitHub Pages
+        id: deployment
         uses: actions/deploy-pages@v4

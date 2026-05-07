@@ -7,7 +7,7 @@ from spacy.util import compounding, minibatch
 
 import mlflow.spacy
 
-IS_SPACY_VERSION_NEWER_THAN_OR_EQUAL_TO_3_0_0 = Version(spacy.__version__) >= Version("3.0.0")
+IS_SPACY_VERSION_NEWER_THAN_OR_EQUAL_TO_3_0_0 = Version(spacy.__version__).major >= 3
 
 # training data
 TRAIN_DATA = [
@@ -52,10 +52,10 @@ if __name__ == "__main__":
         mlflow.log_metrics(losses)
 
     # Log the spaCy model using mlflow
-    mlflow.spacy.log_model(spacy_model=nlp, artifact_path="model")
+    mlflow.spacy.log_model(spacy_model=nlp, name="model")
     model_uri = f"runs:/{mlflow.active_run().info.run_id}/model"
 
-    print(f"Model saved in run {mlflow.active_run().info.run_uuid}")
+    print(f"Model saved in run {mlflow.active_run().info.run_id}")
 
     # Load the model using mlflow and use it to predict data
     nlp2 = mlflow.spacy.load_model(model_uri=model_uri)

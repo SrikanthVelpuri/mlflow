@@ -1,8 +1,8 @@
 import time
 
-from pydantic import BaseModel, StrictFloat, StrictStr, ValidationError, validator
+from pydantic import BaseModel, StrictFloat, StrictStr, ValidationError, field_validator
 
-from mlflow.gateway.config import MlflowModelServingConfig, RouteConfig
+from mlflow.gateway.config import EndpointConfig, MlflowModelServingConfig
 from mlflow.gateway.constants import MLFLOW_SERVING_RESPONSE_KEY
 from mlflow.gateway.exceptions import AIGatewayException
 from mlflow.gateway.providers.base import BaseProvider
@@ -13,7 +13,7 @@ from mlflow.gateway.schemas import chat, completions, embeddings
 class ServingTextResponse(BaseModel):
     predictions: list[StrictStr]
 
-    @validator("predictions", pre=True)
+    @field_validator("predictions", mode="before")
     def extract_choices(cls, predictions):
         if isinstance(predictions, list) and not predictions:
             raise ValueError("The input list is empty")
@@ -35,7 +35,7 @@ class ServingTextResponse(BaseModel):
 class EmbeddingsResponse(BaseModel):
     predictions: list[list[StrictFloat]]
 
-    @validator("predictions", pre=True)
+    @field_validator("predictions", mode="before")
     def validate_predictions(cls, predictions):
         if isinstance(predictions, list) and not predictions:
             raise ValueError("The input list is empty")
@@ -50,11 +50,11 @@ class EmbeddingsResponse(BaseModel):
 
 
 class MlflowModelServingProvider(BaseProvider):
-    NAME = "MLflow Model Serving"
+    DISPLAY_NAME = "MLflow Model Serving"
     CONFIG_TYPE = MlflowModelServingConfig
 
-    def __init__(self, config: RouteConfig) -> None:
-        super().__init__(config)
+    def __init__(self, config: EndpointConfig, enable_tracing: bool = False) -> None:
+        super().__init__(config, enable_tracing=enable_tracing)
         if config.model.config is None or not isinstance(
             config.model.config, MlflowModelServingConfig
         ):
@@ -98,7 +98,9 @@ class MlflowModelServingProvider(BaseProvider):
             for idx, entry in enumerate(inference_data)
         ]
 
-    async def completions(self, payload: completions.RequestPayload) -> completions.ResponsePayload:
+    async def _completions(
+        self, payload: completions.RequestPayload
+    ) -> completions.ResponsePayload:
         # Example request to MLflow REST API server for completions:
         # {
         #     "inputs": ["hi", "hello", "bye"],
@@ -142,7 +144,7 @@ class MlflowModelServingProvider(BaseProvider):
             for entry in inference_data
         ]
 
-    async def chat(self, payload: chat.RequestPayload) -> chat.ResponsePayload:
+    async def _chat(self, payload: chat.RequestPayload) -> chat.ResponsePayload:
         # Example request to MLflow REST API for chat:
         # {
         #     "inputs": ["question"],
@@ -200,7 +202,7 @@ class MlflowModelServingProvider(BaseProvider):
 
         return inference_data
 
-    async def embeddings(self, payload: embeddings.RequestPayload) -> embeddings.ResponsePayload:
+    async def _embeddings(self, payload: embeddings.RequestPayload) -> embeddings.ResponsePayload:
         # Example request to MLflow REST API server for embeddings:
         # {
         #     "inputs": ["a sentence", "another sentence"],

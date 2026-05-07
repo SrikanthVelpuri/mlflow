@@ -4,11 +4,12 @@ import os
 import posixpath
 import tempfile
 import traceback
+import uuid
 from abc import ABC, ABCMeta, abstractmethod
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from mlflow.entities.file_info import FileInfo
 from mlflow.entities.multipart_upload import (
@@ -21,10 +22,12 @@ from mlflow.exceptions import (
     MlflowTraceDataNotFound,
 )
 from mlflow.protos.databricks_pb2 import (
+    INTERNAL_ERROR,
     INVALID_PARAMETER_VALUE,
     RESOURCE_DOES_NOT_EXIST,
+    ErrorCode,
 )
-from mlflow.tracing.artifact_utils import TRACE_DATA_FILE_NAME
+from mlflow.tracing.utils.artifact_utils import TRACE_DATA_FILE_NAME
 from mlflow.utils.annotations import developer_stable
 from mlflow.utils.async_logging.async_artifacts_logging_queue import (
     AsyncArtifactsLoggingQueue,
@@ -78,8 +81,12 @@ class ArtifactRepository:
 
     __metaclass__ = ABCMeta
 
-    def __init__(self, artifact_uri):
+    def __init__(
+        self, artifact_uri: str, tracking_uri: str | None = None, registry_uri: str | None = None
+    ) -> None:
         self.artifact_uri = artifact_uri
+        self.tracking_uri = tracking_uri
+        self.registry_uri = registry_uri
         # Limit the number of threads used for artifact uploads/downloads. Use at most
         # constants._NUM_MAX_THREADS threads or 2 * the number of CPU cores available on the
         # system (whichever is smaller)
@@ -97,6 +104,15 @@ class ArtifactRepository:
                 self.log_artifact(tmp_path, artifact_path)
 
         self._async_logging_queue = AsyncArtifactsLoggingQueue(log_artifact_handler)
+
+    def __repr__(self) -> str:
+        return (
+            f"{self.__class__.__name__}("
+            f"artifact_uri={self.artifact_uri!r}, "
+            f"tracking_uri={self.tracking_uri!r}, "
+            f"registry_uri={self.registry_uri!r}"
+            f")"
+        )
 
     def _create_thread_pool(self):
         return ThreadPoolExecutor(
@@ -163,7 +179,7 @@ class ArtifactRepository:
         """
 
     @abstractmethod
-    def list_artifacts(self, path: Optional[str] = None) -> list:
+    def list_artifacts(self, path: str | None = None) -> list[FileInfo]:
         """
         Return all the artifacts for this run_id directly under path. If path is a file, returns
         an empty list. Will error if path is neither a file nor directory.
@@ -277,7 +293,19 @@ class ArtifactRepository:
 
         # Submit download tasks
         futures = {}
-        if self._is_directory(artifact_path):
+        if artifact_path in ("", None):
+            root_listing = self.list_artifacts(artifact_path)
+            if not root_listing:
+                _logger.info(
+                    "No artifacts found to download at %s. Returning destination path.",
+                    self.artifact_uri,
+                )
+                return dst_path
+            is_dir = True
+        else:
+            is_dir = self._is_directory(artifact_path)
+
+        if is_dir:
             for file_info in self._iter_artifacts_recursive(artifact_path):
                 if file_info.is_dir:  # Empty directory
                     os.makedirs(os.path.join(dst_path, file_info.path), exist_ok=True)
@@ -311,11 +339,20 @@ class ArtifactRepository:
                 template.format(path=path, error=error, traceback=tracebacks[path])
                 for path, error in failed_downloads.items()
             )
+            error_codes = {
+                e.error_code
+                for e in failed_downloads.values()
+                if isinstance(e, MlflowException) and e.error_code != "INTERNAL_ERROR"
+            }
+            error_code = (
+                ErrorCode.Value(error_codes.pop()) if len(error_codes) == 1 else INTERNAL_ERROR
+            )
             raise MlflowException(
                 message=(
                     "The following failures occurred while downloading one or more"
                     f" artifacts from {self.artifact_uri}:\n{_truncate_error(failures)}"
-                )
+                ),
+                error_code=error_code,
             )
 
         return os.path.join(dst_path, artifact_path)
@@ -369,6 +406,13 @@ class ArtifactRepository:
                 raise MlflowTraceDataNotFound(artifact_path=TRACE_DATA_FILE_NAME) from e
             return try_read_trace_data(temp_file)
 
+    def download_trace_attachment(self, path: str) -> bytes:
+        _validate_attachment_path(path)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_file = Path(temp_dir, path)
+            self._download_file(posixpath.join("attachments", path), temp_file)
+            return temp_file.read_bytes()
+
     def upload_trace_data(self, trace_data: str) -> None:
         """
         Upload the trace data.
@@ -379,19 +423,26 @@ class ArtifactRepository:
         with write_local_temp_trace_data_file(trace_data) as temp_file:
             self.log_artifact(temp_file)
 
+    def upload_attachment(self, attachment_id: str, content_bytes: bytes) -> None:
+        _validate_attachment_path(attachment_id)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_file = Path(temp_dir, attachment_id)
+            temp_file.write_bytes(content_bytes)
+            self.log_artifact(temp_file, artifact_path="attachments")
+
 
 @contextmanager
 def write_local_temp_trace_data_file(trace_data: str):
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_file = Path(temp_dir, TRACE_DATA_FILE_NAME)
-        temp_file.write_text(trace_data)
+        temp_file.write_text(trace_data, encoding="utf-8")
         yield temp_file
 
 
 def try_read_trace_data(trace_data_path):
     if not os.path.exists(trace_data_path):
         raise MlflowTraceDataNotFound(artifact_path=trace_data_path)
-    with open(trace_data_path) as f:
+    with open(trace_data_path, encoding="utf-8") as f:
         data = f.read()
     if not data:
         raise MlflowTraceDataNotFound(artifact_path=trace_data_path)
@@ -404,7 +455,7 @@ def try_read_trace_data(trace_data_path):
 class MultipartUploadMixin(ABC):
     @abstractmethod
     def create_multipart_upload(
-        self, local_file: str, num_parts: int, artifact_path: Optional[str] = None
+        self, local_file: str, num_parts: int, artifact_path: str | None = None
     ) -> CreateMultipartUploadResponse:
         """
         Initiate a multipart upload and retrieve the pre-signed upload URLS and upload id.
@@ -423,7 +474,7 @@ class MultipartUploadMixin(ABC):
         local_file: str,
         upload_id: str,
         parts: list[MultipartUploadPart],
-        artifact_path: Optional[str] = None,
+        artifact_path: str | None = None,
     ) -> None:
         """
         Complete a multipart upload.
@@ -442,7 +493,7 @@ class MultipartUploadMixin(ABC):
         self,
         local_file: str,
         upload_id: str,
-        artifact_path: Optional[str] = None,
+        artifact_path: str | None = None,
     ) -> None:
         """
         Abort a multipart upload.
@@ -456,8 +507,66 @@ class MultipartUploadMixin(ABC):
         """
 
 
+class MultipartDownloadMixin(ABC):
+    """
+    Mixin that defines the API for artifact repositories that support multipart
+    download (MPD), i.e. generating presigned URLs for direct download from
+    cloud storage via the MPD flow.
+    """
+
+    @abstractmethod
+    def get_download_presigned_url(self, artifact_path, expiration=300):
+        """
+        Generate a presigned URL for downloading an artifact directly from cloud storage.
+
+        Args:
+            artifact_path: Relative path to the artifact within the artifact URI.
+            expiration: Time in seconds for the presigned URL to remain valid (default: 300).
+
+        Returns:
+            PresignedDownloadUrlResponse containing the presigned URL, headers, and file size.
+        """
+
+
+class PresignedUploadMixin(ABC):
+    """
+    Mixin that defines the API for artifact repositories that support presigned
+    URL uploads, i.e. generating presigned URLs for direct upload to cloud storage.
+    """
+
+    @abstractmethod
+    def create_presigned_upload_url(self, artifact_path, expiration=900):
+        """
+        Generate a presigned URL for uploading an artifact directly to cloud storage.
+
+        Args:
+            artifact_path: Relative path within the run's artifact directory
+                          (e.g. "models/model.pkl").
+            expiration: URL expiration time in seconds (default: 900).
+
+        Returns:
+            CreatePresignedUploadResponse with presigned_url and headers.
+        """
+
+
 def verify_artifact_path(artifact_path):
     if artifact_path and path_not_unique(artifact_path):
         raise MlflowException(
             f"Invalid artifact path: '{artifact_path}'. {bad_path_message(artifact_path)}"
+        )
+
+
+# Attachment IDs are auto-generated as UUID4 by Attachment.__init__.
+# Strict UUID validation doubles as path traversal prevention.
+def _validate_attachment_path(path: str) -> None:
+    try:
+        parsed = uuid.UUID(path)
+        if str(parsed) != path:
+            raise ValueError("Non-canonical UUID format")
+    except (ValueError, AttributeError, TypeError):
+        # error_code is INVALID_PARAMETER_VALUE but this is an attribute/type validation failure
+        raise MlflowException(
+            f"Invalid attachment path: '{path}'. Attachment path must be a valid UUID.",
+            error_code=INVALID_PARAMETER_VALUE,
+            error_class="ATTRIBUTE_NOT_FOUND",
         )

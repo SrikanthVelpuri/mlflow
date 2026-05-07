@@ -37,7 +37,7 @@ def train(training_data, max_runs, epochs, metric, algo, seed):
     # create random file to store run ids of the training tasks
     tracking_client = MlflowClient()
 
-    def new_eval(  # noqa: D417
+    def new_eval(
         nepochs, experiment_id, null_train_loss, null_valid_loss, null_test_loss, return_all=False
     ):
         """
@@ -107,13 +107,11 @@ def train(training_data, max_runs, epochs, metric, algo, seed):
                 valid_loss = null_valid_loss
                 test_loss = null_test_loss
 
-            mlflow.log_metrics(
-                {
-                    f"train_{metric}": train_loss,
-                    f"val_{metric}": valid_loss,
-                    f"test_{metric}": test_loss,
-                }
-            )
+            mlflow.log_metrics({
+                f"train_{metric}": train_loss,
+                f"val_{metric}": valid_loss,
+                f"test_{metric}": test_loss,
+            })
 
             if return_all:
                 return train_loss, valid_loss, test_loss
@@ -156,13 +154,11 @@ def train(training_data, max_runs, epochs, metric, algo, seed):
                 best_val_valid = r.data.metrics["val_rmse"]
                 best_val_test = r.data.metrics["test_rmse"]
         mlflow.set_tag("best_run", best_run.info.run_id)
-        mlflow.log_metrics(
-            {
-                f"train_{metric}": best_val_train,
-                f"val_{metric}": best_val_valid,
-                f"test_{metric}": best_val_test,
-            }
-        )
+        mlflow.log_metrics({
+            f"train_{metric}": best_val_train,
+            f"val_{metric}": best_val_valid,
+            f"test_{metric}": best_val_test,
+        })
 
 
 if __name__ == "__main__":

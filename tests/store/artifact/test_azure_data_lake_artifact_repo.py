@@ -27,6 +27,7 @@ from mlflow.store.artifact.azure_data_lake_artifact_repo import (
 TEST_ROOT_PATH = "some/path"
 TEST_DATA_LAKE_URI_BASE = "abfss://filesystem@account.dfs.core.windows.net"
 TEST_DATA_LAKE_URI = posixpath.join(TEST_DATA_LAKE_URI_BASE, TEST_ROOT_PATH)
+TEST_CREDENTIAL = mock.Mock()
 
 ADLS_REPOSITORY_PACKAGE = "mlflow.store.artifact.azure_data_lake_artifact_repo"
 ADLS_ARTIFACT_REPOSITORY = f"{ADLS_REPOSITORY_PACKAGE}.AzureDataLakeArtifactRepository"
@@ -124,6 +125,22 @@ def mock_file_client(mock_directory_client):
             "dfs.core.usgovcloudapi.net",
             "a/b",
         ),
+        (
+            "abfss://filesystem@acct.dfs.core.windows.net/Pharma/Marketing%20Navigator",
+            "filesystem",
+            "acct",
+            "dfs.core.windows.net",
+            "Pharma/Marketing Navigator",
+        ),
+        (
+            # %2F decodes to "/", which lstrip("/") removes so downstream ADLS
+            # calls receive a relative path.
+            "abfss://filesystem@acct.dfs.core.windows.net/%2Ffoo/bar",
+            "filesystem",
+            "acct",
+            "dfs.core.windows.net",
+            "foo/bar",
+        ),
     ],
 )
 def test_parse_valid_abfss_uri(uri, filesystem, account, region_suffix, path):
@@ -149,13 +166,13 @@ def test_parse_invalid_abfss_uri_bad_scheme():
 
 
 def test_list_artifacts_empty(mock_data_lake_client):
-    repo = AzureDataLakeArtifactRepository(TEST_DATA_LAKE_URI, None)
+    repo = AzureDataLakeArtifactRepository(TEST_DATA_LAKE_URI, credential=TEST_CREDENTIAL)
     mock_data_lake_client.get_file_system_client.get_paths.return_value = MockPathList([])
     assert repo.list_artifacts() == []
 
 
 def test_list_artifacts_single_file(mock_data_lake_client):
-    repo = AzureDataLakeArtifactRepository(TEST_DATA_LAKE_URI, None)
+    repo = AzureDataLakeArtifactRepository(TEST_DATA_LAKE_URI, credential=TEST_CREDENTIAL)
 
     # Evaluate single file
     path_props = PathProperties(name=posixpath.join(TEST_DATA_LAKE_URI, "file"), content_length=42)
@@ -164,7 +181,7 @@ def test_list_artifacts_single_file(mock_data_lake_client):
 
 
 def test_list_artifacts(mock_filesystem_client):
-    repo = AzureDataLakeArtifactRepository(TEST_DATA_LAKE_URI, None)
+    repo = AzureDataLakeArtifactRepository(TEST_DATA_LAKE_URI, credential=TEST_CREDENTIAL)
 
     # Create some files to return
     dir_prefix = PathProperties(is_directory=True, name=posixpath.join(TEST_ROOT_PATH, "dir"))
@@ -193,7 +210,7 @@ def test_list_artifacts(mock_filesystem_client):
 )
 def test_log_artifact(mock_filesystem_client, mock_directory_client, tmp_path, contents):
     file_name = "b.txt"
-    repo = AzureDataLakeArtifactRepository(TEST_DATA_LAKE_URI, None)
+    repo = AzureDataLakeArtifactRepository(TEST_DATA_LAKE_URI, credential=TEST_CREDENTIAL)
 
     parentd = tmp_path.joinpath("data")
     parentd.mkdir()
@@ -214,7 +231,9 @@ def test_log_artifact(mock_filesystem_client, mock_directory_client, tmp_path, c
 
 def test_log_artifacts(mock_filesystem_client, mock_directory_client, tmp_path):
     fake_sas_token = "fake_session_token"
-    repo = AzureDataLakeArtifactRepository(TEST_DATA_LAKE_URI, AzureSasCredential(fake_sas_token))
+    repo = AzureDataLakeArtifactRepository(
+        TEST_DATA_LAKE_URI, credential=AzureSasCredential(fake_sas_token)
+    )
 
     parentd = tmp_path.joinpath("data")
     parentd.mkdir()
@@ -249,7 +268,9 @@ def test_log_artifacts(mock_filesystem_client, mock_directory_client, tmp_path):
 
 def test_log_artifacts_in_parallel_when_necessary(tmp_path, monkeypatch):
     fake_sas_token = "fake_session_token"
-    repo = AzureDataLakeArtifactRepository(TEST_DATA_LAKE_URI, AzureSasCredential(fake_sas_token))
+    repo = AzureDataLakeArtifactRepository(
+        TEST_DATA_LAKE_URI, credential=AzureSasCredential(fake_sas_token)
+    )
 
     parentd = tmp_path.joinpath("data")
     parentd.mkdir()
@@ -278,11 +299,9 @@ def test_log_artifacts_in_parallel_when_necessary(tmp_path, monkeypatch):
     [(None, False), (100, False), (500 * 1024**2 - 1, False), (500 * 1024**2, True)],
 )
 def test_download_file_in_parallel_when_necessary(file_size, is_parallel_download):
-    repo = AzureDataLakeArtifactRepository(TEST_DATA_LAKE_URI, None)
+    repo = AzureDataLakeArtifactRepository(TEST_DATA_LAKE_URI, credential=TEST_CREDENTIAL)
     remote_file_path = "file_1.txt"
-    list_artifacts_result = (
-        [FileInfo(path=remote_file_path, is_dir=False, file_size=file_size)] if file_size else []
-    )
+    list_artifacts_result = [FileInfo(path=remote_file_path, is_dir=False, file_size=file_size)]
     with (
         mock.patch(
             f"{ADLS_ARTIFACT_REPOSITORY}.list_artifacts",
@@ -303,7 +322,7 @@ def test_download_file_in_parallel_when_necessary(file_size, is_parallel_downloa
 
 
 def test_download_file_artifact(mock_directory_client, mock_file_client, tmp_path):
-    repo = AzureDataLakeArtifactRepository(TEST_DATA_LAKE_URI, None)
+    repo = AzureDataLakeArtifactRepository(TEST_DATA_LAKE_URI, credential=TEST_CREDENTIAL)
 
     def create_file(file):
         local_path = os.path.basename(file.name)
@@ -316,8 +335,56 @@ def test_download_file_artifact(mock_directory_client, mock_file_client, tmp_pat
     mock_directory_client.get_file_client.assert_called_once_with("test.txt")
 
 
+TEST_ENCODED_ROOT_PATH = "Pharma/Commercial/Global/Marketing%20Navigator"
+TEST_DECODED_ROOT_PATH = "Pharma/Commercial/Global/Marketing Navigator"
+TEST_DATA_LAKE_URI_ENCODED = posixpath.join(TEST_DATA_LAKE_URI_BASE, TEST_ENCODED_ROOT_PATH)
+
+
+def test_log_artifact_decodes_percent_encoded_path(
+    mock_filesystem_client, mock_directory_client, tmp_path
+):
+    # Paths with %20 must be decoded before being handed to the Azure SDK,
+    # otherwise the SDK re-quotes them (%2520) and a SAS signature minted over
+    # the decoded path fails validation.
+    repo = AzureDataLakeArtifactRepository(TEST_DATA_LAKE_URI_ENCODED, credential=TEST_CREDENTIAL)
+
+    f = tmp_path.joinpath("b.txt")
+    f.write_text("B")
+    repo.log_artifact(f)
+
+    mock_filesystem_client.get_directory_client.assert_called_once_with(TEST_DECODED_ROOT_PATH)
+    assert "%20" not in mock_filesystem_client.get_directory_client.call_args[0][0]
+
+
+def test_list_artifacts_decodes_percent_encoded_path(mock_filesystem_client):
+    repo = AzureDataLakeArtifactRepository(TEST_DATA_LAKE_URI_ENCODED, credential=TEST_CREDENTIAL)
+    mock_filesystem_client.get_paths.return_value = MockPathList([])
+
+    repo.list_artifacts()
+
+    mock_filesystem_client.get_paths.assert_called_once_with(
+        path=TEST_DECODED_ROOT_PATH, recursive=False
+    )
+
+
+def test_download_decodes_percent_encoded_path(
+    mock_filesystem_client, mock_directory_client, mock_file_client, tmp_path
+):
+    repo = AzureDataLakeArtifactRepository(TEST_DATA_LAKE_URI_ENCODED, credential=TEST_CREDENTIAL)
+
+    def create_file(file):
+        tmp_path.joinpath(os.path.basename(file.name)).write_text("hello")
+
+    mock_file_client.download_file().readinto.side_effect = create_file
+    repo.download_artifacts("test.txt")
+
+    base_dir = mock_filesystem_client.get_directory_client.call_args[0][0]
+    assert base_dir == TEST_DECODED_ROOT_PATH
+    assert "%20" not in base_dir
+
+
 def test_download_directory_artifact(mock_filesystem_client, mock_file_client, tmp_path):
-    repo = AzureDataLakeArtifactRepository(TEST_DATA_LAKE_URI, None)
+    repo = AzureDataLakeArtifactRepository(TEST_DATA_LAKE_URI, credential=TEST_CREDENTIAL)
 
     file_path_1 = "file_1"
     file_path_2 = "file_2"
@@ -390,21 +457,21 @@ def test_refresh_credentials():
 
         first_credential = AzureSasCredential("fake_token")
         repo = AzureDataLakeArtifactRepository(
-            TEST_DATA_LAKE_URI, first_credential, credential_refresh
+            TEST_DATA_LAKE_URI,
+            credential=first_credential,
+            credential_refresh_def=credential_refresh,
         )
 
         get_data_lake_client_mock.assert_called_with(account_url=ANY, credential=first_credential)
 
-        try:
+        with pytest.raises(requests.HTTPError, match=r".*", check=lambda e: e == err):
             repo._download_from_cloud("test.txt", "local_path")
-        except requests.HTTPError as e:
-            assert e == err
 
         get_data_lake_client_mock.assert_called_with(account_url=ANY, credential=second_credential)
 
 
 def test_trace_data(mock_data_lake_client, tmp_path):
-    repo = AzureDataLakeArtifactRepository(TEST_DATA_LAKE_URI, None)
+    repo = AzureDataLakeArtifactRepository(TEST_DATA_LAKE_URI, credential=TEST_CREDENTIAL)
     with pytest.raises(MlflowException, match=r"Trace data not found for path="):
         repo.download_trace_data()
     trace_data_path = tmp_path.joinpath("traces.json")

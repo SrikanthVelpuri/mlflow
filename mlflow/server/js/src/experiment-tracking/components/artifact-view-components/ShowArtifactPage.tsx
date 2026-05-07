@@ -15,6 +15,8 @@ import {
   PDF_EXTENSIONS,
   DATA_EXTENSIONS,
   AUDIO_EXTENSIONS,
+  VIDEO_EXTENSIONS,
+  MARKDOWN_EXTENSIONS,
 } from '../../../common/utils/FileUtils';
 import { getLoggedModelPathsFromTags, getLoggedTablesFromTags } from '../../../common/utils/TagUtils';
 import { ONE_MB } from '../../constants';
@@ -31,9 +33,12 @@ import { ModelRegistryRoutes } from '../../../model-registry/routes';
 import Utils from '../../../common/utils/Utils';
 import { FormattedMessage } from 'react-intl';
 import { ShowArtifactLoggedTableView } from './ShowArtifactLoggedTableView';
-import { Empty, Spacer, useDesignSystemTheme } from '@databricks/design-system';
+import { Empty, Spacer } from '@databricks/design-system';
 import { LazyShowArtifactAudioView } from './LazyShowArtifactAudioView';
 import type { LoggedModelArtifactViewerProps } from './ArtifactViewComponents.types';
+import { LazyShowArtifactVideoView } from './LazyShowArtifactVideoView';
+import type { KeyValueEntity } from '../../../common/types';
+import { LazyShowArtifactMarkdownView } from './LazyShowArtifactMarkdownView';
 
 const MAX_PREVIEW_ARTIFACT_SIZE_MB = 50;
 
@@ -46,17 +51,20 @@ type ShowArtifactPageProps = {
   runTags?: any;
   modelVersions?: any[];
   showArtifactLoggedTableView?: boolean;
+  entityTags?: Partial<KeyValueEntity>[];
 } & LoggedModelArtifactViewerProps;
 
 class ShowArtifactPage extends Component<ShowArtifactPageProps> {
   render() {
     if (this.props.path) {
-      const { loggedModelId, isLoggedModelsMode, path, runUuid } = this.props;
+      const { loggedModelId, isLoggedModelsMode, path, runUuid, experimentId, entityTags } = this.props;
       const commonArtifactProps = {
         loggedModelId,
         isLoggedModelsMode,
         path,
         runUuid,
+        experimentId,
+        entityTags,
       };
 
       const normalizedExtension = getExtension(this.props.path);
@@ -84,6 +92,7 @@ class ShowArtifactPage extends Component<ShowArtifactPageProps> {
               path={this.props.path}
               artifactRootUri={this.props.artifactRootUri}
               registeredModelLink={registeredModelLink}
+              experimentId={this.props.experimentId}
             />
           );
         }
@@ -94,6 +103,16 @@ class ShowArtifactPage extends Component<ShowArtifactPageProps> {
           return <ShowArtifactImageView {...commonArtifactProps} />;
         } else if (DATA_EXTENSIONS.has(normalizedExtension.toLowerCase())) {
           return <LazyShowArtifactTableView {...commonArtifactProps} />;
+        } else if (MARKDOWN_EXTENSIONS.has(normalizedExtension.toLowerCase())) {
+          return (
+            <LazyShowArtifactMarkdownView
+              loggedModelId={loggedModelId}
+              isLoggedModelsMode={isLoggedModelsMode}
+              path={path}
+              runUuid={runUuid}
+              size={this.props.size}
+            />
+          );
         } else if (TEXT_EXTENSIONS.has(normalizedExtension.toLowerCase())) {
           return <ShowArtifactTextView {...commonArtifactProps} size={this.props.size} />;
         } else if (MAP_EXTENSIONS.has(normalizedExtension.toLowerCase())) {
@@ -104,6 +123,8 @@ class ShowArtifactPage extends Component<ShowArtifactPageProps> {
           return <LazyShowArtifactPdfView {...commonArtifactProps} />;
         } else if (AUDIO_EXTENSIONS.has(normalizedExtension.toLowerCase())) {
           return <LazyShowArtifactAudioView {...commonArtifactProps} />;
+        } else if (VIDEO_EXTENSIONS.has(normalizedExtension.toLowerCase())) {
+          return <LazyShowArtifactVideoView {...commonArtifactProps} />;
         }
       }
     }
@@ -129,7 +150,7 @@ const getSelectFileView = () => {
         }
         description={
           <FormattedMessage
-            defaultMessage="Supported formats: image, text, html, pdf, audio, geojson files"
+            defaultMessage="Supported formats: image, text, markdown, html, pdf, audio, video, geojson files"
             description="Text to explain users which formats are supported to display the artifacts"
           />
         }
@@ -156,6 +177,7 @@ const getFileTooLargeView = () => {
         }
         description={
           <FormattedMessage
+            // eslint-disable-next-line formatjs/enforce-default-message
             defaultMessage={`Maximum file size for preview: ${MAX_PREVIEW_ARTIFACT_SIZE_MB}MiB`}
             description="Text to notify users of the maximum file size for which artifact previews are displayed"
           />

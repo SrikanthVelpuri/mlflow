@@ -10,13 +10,7 @@ import type {
   RunsChartsParallelCardConfig,
   RunsChartsScatterCardConfig,
 } from '../../runs-charts.types';
-import { RunsChartsRunData } from '../RunsCharts.common';
-import {
-  shouldEnableDraggableChartsGridLayout,
-  shouldEnableDifferenceViewCharts,
-  shouldEnableImageGridCharts,
-  shouldUseNewRunRowsVisibilityModel,
-} from '../../../../../common/utils/FeatureUtils';
+import type { RunsChartsRunData } from '../RunsCharts.common';
 import { RunsChartsBarChartCard } from './RunsChartsBarChartCard';
 import { RunsChartsLineChartCard } from './RunsChartsLineChartCard';
 import { RunsChartsScatterChartCard } from './RunsChartsScatterChartCard';
@@ -31,10 +25,11 @@ import type {
 import { RunsChartsDifferenceChartCard } from './RunsChartsDifferenceChartCard';
 import type { RunsGroupByConfig } from '../../../experiment-page/utils/experimentPage.group-row-utils';
 import { RunsChartsImageChartCard } from './RunsChartsImageChartCard';
-import { RunsChartsGlobalLineChartConfig } from '../../../experiment-page/models/ExperimentPageUIState';
+import type { RunsChartsGlobalLineChartConfig } from '../../../experiment-page/models/ExperimentPageUIState';
 
 export interface RunsChartsCardProps
-  extends RunsChartCardReorderProps,
+  extends
+    RunsChartCardReorderProps,
     RunsChartCardFullScreenProps,
     RunsChartCardVisibilityProps,
     RunsChartCardSizeProps {
@@ -63,8 +58,12 @@ const RunsChartsCardRaw = ({
   fullScreen,
   canMoveDown,
   canMoveUp,
+  canMoveToTop,
+  canMoveToBottom,
   previousChartUuid,
   nextChartUuid,
+  firstChartUuid,
+  lastChartUuid,
   onReorderWith,
   autoRefreshEnabled,
   onDownloadFullMetricHistoryCsv,
@@ -74,9 +73,6 @@ const RunsChartsCardRaw = ({
   isInViewport,
   isInViewportDeferred,
 }: RunsChartsCardProps) => {
-  const usingGridLayout = shouldEnableDraggableChartsGridLayout();
-  const chartElementKey = `${cardConfig.uuid}-${index}-${sectionIndex}`;
-
   const reorderProps = useMemo(
     () => ({
       onReorderWith,
@@ -84,8 +80,22 @@ const RunsChartsCardRaw = ({
       canMoveUp,
       previousChartUuid,
       nextChartUuid,
+      canMoveToTop,
+      canMoveToBottom,
+      firstChartUuid,
+      lastChartUuid,
     }),
-    [onReorderWith, canMoveDown, canMoveUp, previousChartUuid, nextChartUuid],
+    [
+      onReorderWith,
+      canMoveDown,
+      canMoveUp,
+      previousChartUuid,
+      nextChartUuid,
+      canMoveToTop,
+      canMoveToBottom,
+      firstChartUuid,
+      lastChartUuid,
+    ],
   );
 
   const editProps = useMemo(
@@ -100,7 +110,6 @@ const RunsChartsCardRaw = ({
   const commonChartProps = useMemo(
     () => ({
       fullScreen,
-      key: usingGridLayout ? undefined : chartElementKey,
       autoRefreshEnabled,
       groupBy,
       hideEmptyCharts,
@@ -112,8 +121,6 @@ const RunsChartsCardRaw = ({
     }),
     [
       fullScreen,
-      usingGridLayout,
-      chartElementKey,
       autoRefreshEnabled,
       groupBy,
       editProps,
@@ -125,12 +132,7 @@ const RunsChartsCardRaw = ({
     ],
   );
 
-  const slicedRuns = useMemo(() => {
-    if (shouldUseNewRunRowsVisibilityModel()) {
-      return chartRunData.filter(({ hidden }) => !hidden).reverse();
-    }
-    return chartRunData.slice(0, cardConfig.runsCountToCompare || 10).reverse();
-  }, [chartRunData, cardConfig.runsCountToCompare]);
+  const slicedRuns = useMemo(() => chartRunData.filter(({ hidden }) => !hidden).reverse(), [chartRunData]);
 
   if (cardConfig.type === RunsChartType.PARALLEL) {
     return (
@@ -142,7 +144,7 @@ const RunsChartsCardRaw = ({
     );
   }
 
-  if (shouldEnableDifferenceViewCharts() && cardConfig.type === RunsChartType.DIFFERENCE) {
+  if (cardConfig.type === RunsChartType.DIFFERENCE) {
     return (
       <RunsChartsDifferenceChartCard
         config={cardConfig as RunsChartsDifferenceCardConfig}
@@ -152,7 +154,7 @@ const RunsChartsCardRaw = ({
     );
   }
 
-  if (shouldEnableImageGridCharts() && cardConfig.type === RunsChartType.IMAGE) {
+  if (cardConfig.type === RunsChartType.IMAGE) {
     return (
       <RunsChartsImageChartCard
         config={cardConfig as RunsChartsImageCardConfig}

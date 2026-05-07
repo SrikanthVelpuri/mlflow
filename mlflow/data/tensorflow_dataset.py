@@ -1,7 +1,7 @@
 import json
 import logging
 from functools import cached_property
-from typing import Any, Optional, Union
+from typing import Any
 
 import numpy as np
 
@@ -33,8 +33,8 @@ class TensorFlowDataset(Dataset, PyFuncConvertibleDatasetMixin):
         features,
         source: DatasetSource,
         targets=None,
-        name: Optional[str] = None,
-        digest: Optional[str] = None,
+        name: str | None = None,
+        digest: str | None = None,
     ):
         """
         Args:
@@ -77,7 +77,7 @@ class TensorFlowDataset(Dataset, PyFuncConvertibleDatasetMixin):
         self._targets = targets
         super().__init__(source=source, name=name, digest=digest)
 
-    def _compute_tensorflow_dataset_digest(  # noqa: D417
+    def _compute_tensorflow_dataset_digest(
         self,
         dataset,
         targets=None,
@@ -152,12 +152,10 @@ class TensorFlowDataset(Dataset, PyFuncConvertibleDatasetMixin):
         """
         schema = json.dumps(self.schema.to_dict()) if self.schema else None
         config = super().to_dict()
-        config.update(
-            {
-                "schema": schema,
-                "profile": json.dumps(self.profile),
-            }
-        )
+        config.update({
+            "schema": schema,
+            "profile": json.dumps(self.profile),
+        })
         return config
 
     @property
@@ -182,7 +180,7 @@ class TensorFlowDataset(Dataset, PyFuncConvertibleDatasetMixin):
         return self._targets
 
     @property
-    def profile(self) -> Optional[Any]:
+    def profile(self) -> Any | None:
         """
         A profile of the dataset. May be None if no profile is available.
         """
@@ -194,17 +192,15 @@ class TensorFlowDataset(Dataset, PyFuncConvertibleDatasetMixin):
             else int(tf.size(self._features).numpy()),
         }
         if self._targets is not None:
-            profile.update(
-                {
-                    "targets_cardinality": int(self._targets.cardinality().numpy())
-                    if isinstance(self._targets, tf.data.Dataset)
-                    else int(tf.size(self._targets).numpy()),
-                }
-            )
+            profile.update({
+                "targets_cardinality": int(self._targets.cardinality().numpy())
+                if isinstance(self._targets, tf.data.Dataset)
+                else int(tf.size(self._targets).numpy()),
+            })
         return profile
 
     @cached_property
-    def schema(self) -> Optional[TensorDatasetSchema]:
+    def schema(self) -> TensorDatasetSchema | None:
         """
         An MLflow TensorSpec schema representing the tensor dataset
         """
@@ -268,14 +264,12 @@ class TensorFlowDataset(Dataset, PyFuncConvertibleDatasetMixin):
                 " are not supported.",
                 INVALID_PARAMETER_VALUE,
             )
-        return _infer_schema(
-            {
-                # MLflow Schemas currently require each tensor to have a name, if more than
-                # one tensor is defined. Accordingly, use the index as the name
-                str(i): data_element
-                for i, data_element in enumerate(numpy_data)
-            }
-        )
+        return _infer_schema({
+            # MLflow Schemas currently require each tensor to have a name, if more than
+            # one tensor is defined. Accordingly, use the index as the name
+            str(i): data_element
+            for i, data_element in enumerate(numpy_data)
+        })
 
     def to_pyfunc(self) -> PyFuncInputsOutputs:
         """
@@ -301,15 +295,17 @@ class TensorFlowDataset(Dataset, PyFuncConvertibleDatasetMixin):
             targets=self._targets.numpy() if self._targets is not None else None,
             path=path,
             feature_names=feature_names,
+            name=self.name,
+            digest=self.digest,
         )
 
 
 def from_tensorflow(
     features,
-    source: Optional[Union[str, DatasetSource]] = None,
+    source: str | DatasetSource | None = None,
     targets=None,
-    name: Optional[str] = None,
-    digest: Optional[str] = None,
+    name: str | None = None,
+    digest: str | None = None,
 ) -> TensorFlowDataset:
     """Constructs a TensorFlowDataset object from TensorFlow data, optional targets, and source.
 

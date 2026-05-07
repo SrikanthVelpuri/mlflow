@@ -54,7 +54,7 @@ class ShapEvaluator(BuiltInEvaluator):
         extra_metrics: list[EvaluationMetric],
         custom_artifacts=None,
         **kwargs,
-    ) -> Optional[EvaluationResult]:
+    ) -> EvaluationResult | None:
         if isinstance(model, _ServedPyFuncModel):
             _logger.warning(
                 "Skipping model explainability because a model server is used for environment "
@@ -198,12 +198,7 @@ class ShapEvaluator(BuiltInEvaluator):
 
             _logger.info(f"Shap explainer {explainer.__class__.__name__} is used.")
 
-            if algorithm == "kernel":
-                shap_values = shap.Explanation(
-                    explainer.shap_values(sampled_X), feature_names=self.dataset.feature_names
-                )
-            else:
-                shap_values = explainer(sampled_X)
+            shap_values = explainer(sampled_X)
         except Exception as e:
             # Shap evaluation might fail on some edge cases, e.g., unsupported input data values
             # or unsupported model on specific shap explainer. Catch exception to prevent it
@@ -218,17 +213,20 @@ class ShapEvaluator(BuiltInEvaluator):
             )
             _logger.debug("", exc_info=True)
             return
-        try:
-            mlflow.shap.log_explainer(explainer, artifact_path="explainer")
-        except Exception as e:
-            # TODO: The explainer saver is buggy, if `get_underlying_model_flavor` return "unknown",
-            #   then fallback to shap explainer saver, and shap explainer will call `model.save`
-            #   for sklearn model, there is no `.save` method, so error will happen.
-            _logger.warning(
-                f"Logging explainer failed. Reason: {e!r}. "
-                "Set logging level to DEBUG to see the full traceback."
-            )
-            _logger.debug("", exc_info=True)
+
+        if self.evaluator_config.get("log_explainer", False):
+            try:
+                mlflow.shap.log_explainer(explainer, name="explainer")
+            except Exception as e:
+                # TODO: The explainer saver is buggy, if `get_underlying_model_flavor` return
+                #   "unknown", then fallback to shap explainer saver, and shap explainer will call
+                #   `model.save` for sklearn model, there is no `.save` method, so error will
+                #   happen.
+                _logger.warning(
+                    f"Logging explainer failed. Reason: {e!r}. "
+                    "Set logging level to DEBUG to see the full traceback."
+                )
+                _logger.debug("", exc_info=True)
 
         def _adjust_color_bar():
             pyplot.gcf().axes[-1].set_aspect("auto")
@@ -290,4 +288,4 @@ def _compute_df_mode_or_mean(df):
 
     means = {} if df_cont.empty else df_cont.mean().to_dict()
     modes = {} if df_non_cont.empty else df_non_cont.mode().loc[0].to_dict()
-    return {**means, **modes}
+    return means | modes

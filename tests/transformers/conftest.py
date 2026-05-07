@@ -2,6 +2,7 @@ import pytest
 from packaging.version import Version
 
 from tests.transformers.helper import (
+    IS_TRANSFORMERS_V5_OR_LATER,
     load_audio_classification_pipeline,
     load_component_multi_modal,
     load_conversational_pipeline,
@@ -15,7 +16,6 @@ from tests.transformers.helper import (
     load_small_conversational_model,
     load_small_multi_modal_pipeline,
     load_small_qa_pipeline,
-    load_small_qa_tf_pipeline,
     load_small_vision_model,
     load_summarizer_pipeline,
     load_table_question_answering_pipeline,
@@ -25,17 +25,18 @@ from tests.transformers.helper import (
     load_translation_pipeline,
     load_whisper_pipeline,
     load_zero_shot_pipeline,
+    transformers_version,
 )
 
 
 @pytest.fixture
 def small_qa_pipeline():
+    if IS_TRANSFORMERS_V5_OR_LATER:
+        pytest.skip(
+            reason="QuestionAnsweringPipeline was removed in transformers 5.0. "
+            "See https://github.com/huggingface/transformers/blob/main/MIGRATION_GUIDE_V5.md"
+        )
     return load_small_qa_pipeline()
-
-
-@pytest.fixture
-def small_qa_tf_pipeline():
-    return load_small_qa_tf_pipeline()
 
 
 @pytest.fixture
@@ -45,11 +46,21 @@ def small_vision_model():
 
 @pytest.fixture
 def small_multi_modal_pipeline():
+    if IS_TRANSFORMERS_V5_OR_LATER:
+        pytest.skip(
+            reason="VisualQuestionAnsweringPipeline was removed in transformers 5.0. "
+            "See https://github.com/huggingface/transformers/blob/main/MIGRATION_GUIDE_V5.md"
+        )
     return load_small_multi_modal_pipeline()
 
 
 @pytest.fixture
 def component_multi_modal():
+    if IS_TRANSFORMERS_V5_OR_LATER:
+        pytest.skip(
+            reason="VisualQuestionAnsweringPipeline was removed in transformers 5.0. "
+            "See https://github.com/huggingface/transformers/blob/main/MIGRATION_GUIDE_V5.md"
+        )
     return load_component_multi_modal()
 
 
@@ -75,6 +86,12 @@ def fill_mask_pipeline():
 
 @pytest.fixture
 def text2text_generation_pipeline():
+    if IS_TRANSFORMERS_V5_OR_LATER:
+        pytest.skip(
+            reason="Text2TextGenerationPipeline was removed in transformers 5.0. "
+            "See https://github.com/huggingface/transformers/blob/main/MIGRATION_GUIDE_V5.md"
+        )
+
     return load_text2text_generation_pipeline()
 
 
@@ -85,9 +102,12 @@ def text_generation_pipeline():
 
 @pytest.fixture
 def translation_pipeline():
-    import transformers
-
-    if Version(transformers.__version__) > Version("4.44.2"):
+    if IS_TRANSFORMERS_V5_OR_LATER:
+        pytest.skip(
+            reason="TranslationPipeline was removed in transformers 5.0. "
+            "See https://github.com/huggingface/transformers/blob/main/MIGRATION_GUIDE_V5.md"
+        )
+    elif transformers_version > Version("4.44.2"):
         pytest.skip(
             reason="This multi-task pipeline has a loading issue with Transformers 4.45.x. "
             "See https://github.com/huggingface/transformers/issues/33398 for more details."
@@ -103,9 +123,12 @@ def text_classification_pipeline():
 
 @pytest.fixture
 def summarizer_pipeline():
-    import transformers
-
-    if Version(transformers.__version__) > Version("4.44.2"):
+    if IS_TRANSFORMERS_V5_OR_LATER:
+        pytest.skip(
+            reason="SummarizationPipeline was removed in transformers 5.0. "
+            "See https://github.com/huggingface/transformers/blob/main/MIGRATION_GUIDE_V5.md"
+        )
+    elif transformers_version > Version("4.44.2"):
         pytest.skip(
             reason="This multi-task pipeline has a loading issue with Transformers 4.45.x. "
             "See https://github.com/huggingface/transformers/issues/33398 for more details."

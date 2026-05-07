@@ -2,12 +2,14 @@ import logging
 import warnings
 from collections import defaultdict
 from copy import deepcopy
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List
 
 import numpy as np
 import pandas as pd
+import pydantic
 
 from mlflow.exceptions import MlflowException
+from mlflow.protos.databricks_pb2 import INVALID_PARAMETER_VALUE
 from mlflow.types import DataType
 from mlflow.types.schema import (
     HAS_PYSPARK,
@@ -37,7 +39,7 @@ class TensorsNotSupportedException(MlflowException):
         super().__init__(f"Multidimensional arrays (aka tensors) are not supported. {msg}")
 
 
-def _get_tensor_shape(data, variable_dimension: Optional[int] = 0) -> tuple:
+def _get_tensor_shape(data, variable_dimension: int | None = 0) -> tuple[int, ...]:
     """Infer the shape of the inputted data.
 
     This method creates the shape of the tensor to store in the TensorSpec. The variable dimension
@@ -93,7 +95,7 @@ def clean_tensor_type(dtype: np.dtype):
     return dtype
 
 
-def _infer_colspec_type(data: Any) -> Union[DataType, Array, Object, AnyType]:
+def _infer_colspec_type(data: Any) -> DataType | Array | Object | AnyType:
     """
     Infer an MLflow Colspec type from the dataset.
 
@@ -113,7 +115,12 @@ def _infer_colspec_type(data: Any) -> Union[DataType, Array, Object, AnyType]:
     return dtype
 
 
-def _infer_datatype(data: Any) -> Optional[Union[DataType, Array, Object, AnyType]]:
+class InvalidDataForSignatureInferenceError(MlflowException):
+    def __init__(self, message):
+        super().__init__(message=message, error_code=INVALID_PARAMETER_VALUE)
+
+
+def _infer_datatype(data: Any) -> DataType | Array | Object | AnyType | None:
     """
     Infer the datatype of input data.
     Data type and inferred schema type mapping:
@@ -130,6 +137,16 @@ def _infer_datatype(data: Any) -> Optional[Union[DataType, Array, Object, AnyTyp
         While empty lists are inferred as AnyType instead of None after the support of AnyType.
         e.g. [] -> AnyType, [[], []] -> Array(Any)
     """
+    if isinstance(data, pydantic.BaseModel):
+        raise InvalidDataForSignatureInferenceError(
+            message="MLflow does not support inferring model signature from input example "
+            "with Pydantic objects. To use Pydantic objects, define your PythonModel's "
+            "`predict` method with a Pydantic type hint, and model signature will be automatically "
+            "inferred when logging the model. e.g. "
+            "`def predict(self, model_input: list[PydanticType])`. Check "
+            "https://mlflow.org/docs/latest/model/python_model.html#type-hint-usage-in-pythonmodel "
+            "for more details."
+        )
 
     if _is_none_or_nan(data) or (isinstance(data, (list, dict)) and not data):
         return AnyType()
@@ -151,7 +168,7 @@ def _infer_datatype(data: Any) -> Optional[Union[DataType, Array, Object, AnyTyp
     return _infer_scalar_datatype(data)
 
 
-def _infer_array_datatype(data: Union[list, np.ndarray]) -> Optional[Array]:
+def _infer_array_datatype(data: list[Any] | np.ndarray) -> Array | None:
     """Infer schema from an array. This tries to infer type if there is at least one
     non-null item in the list, assuming the list has a homogeneous type. However,
     if the list is empty or all items are null, returns None as a sign of undetermined.
@@ -317,88 +334,76 @@ def _infer_schema(data: Any) -> Schema:
             # if col exists in item but its value is None, then it is not required
             requiredness[col] = all(item.get(col) is not None for item in data)
 
-        schema = Schema(
-            [
-                ColSpec(_infer_colspec_type(values).dtype, name=name, required=requiredness[name])
-                for name, values in col_data_mapping.items()
-            ]
-        )
+        schema = Schema([
+            ColSpec(_infer_colspec_type(values).dtype, name=name, required=requiredness[name])
+            for name, values in col_data_mapping.items()
+        ])
 
     elif isinstance(data, dict):
         # dictionary of (name -> numpy.ndarray)
         if all(isinstance(values, np.ndarray) for values in data.values()):
-            schema = Schema(
-                [
-                    TensorSpec(
-                        type=clean_tensor_type(ndarray.dtype),
-                        shape=_get_tensor_shape(ndarray),
-                        name=name,
-                    )
-                    for name, ndarray in data.items()
-                ]
-            )
+            schema = Schema([
+                TensorSpec(
+                    type=clean_tensor_type(ndarray.dtype),
+                    shape=_get_tensor_shape(ndarray),
+                    name=name,
+                )
+                for name, ndarray in data.items()
+            ])
         # Dict[str, Union[DataType, List, Dict]]
         else:
             if any(not isinstance(key, str) for key in data):
                 raise MlflowException("The dictionary keys are not all strings.")
-            schema = Schema(
-                [
-                    ColSpec(
-                        _infer_colspec_type(value),
-                        name=name,
-                        required=_infer_required(value),
-                    )
-                    for name, value in data.items()
-                ]
-            )
+            schema = Schema([
+                ColSpec(
+                    _infer_colspec_type(value),
+                    name=name,
+                    required=_infer_required(value),
+                )
+                for name, value in data.items()
+            ])
     # pandas.Series
     elif isinstance(data, pd.Series):
         name = getattr(data, "name", None)
-        schema = Schema(
-            [
-                ColSpec(
-                    type=_infer_pandas_column(data),
-                    name=name,
-                    required=_infer_required(data),
-                )
-            ]
-        )
+        schema = Schema([
+            ColSpec(
+                type=_infer_pandas_column(data),
+                name=name,
+                required=_infer_required(data),
+            )
+        ])
     # pandas.DataFrame
     elif isinstance(data, pd.DataFrame):
-        schema = Schema(
-            [
-                ColSpec(
-                    type=_infer_pandas_column(data[col]),
-                    name=col,
-                    required=_infer_required(data[col]),
-                )
-                for col in data.columns
-            ]
-        )
+        schema = Schema([
+            ColSpec(
+                type=_infer_pandas_column(data[col]),
+                name=col,
+                required=_infer_required(data[col]),
+            )
+            for col in data.columns
+        ])
     # numpy.ndarray
     elif isinstance(data, np.ndarray):
-        schema = Schema(
-            [TensorSpec(type=clean_tensor_type(data.dtype), shape=_get_tensor_shape(data))]
-        )
+        schema = Schema([
+            TensorSpec(type=clean_tensor_type(data.dtype), shape=_get_tensor_shape(data))
+        ])
     # scipy.sparse.csr_matrix/csc_matrix
     elif isinstance(data, (csc_matrix, csr_matrix)):
-        schema = Schema(
-            [TensorSpec(type=clean_tensor_type(data.data.dtype), shape=_get_tensor_shape(data))]
-        )
+        schema = Schema([
+            TensorSpec(type=clean_tensor_type(data.data.dtype), shape=_get_tensor_shape(data))
+        ])
     # pyspark.sql.DataFrame
     elif _is_spark_df(data):
-        schema = Schema(
-            [
-                ColSpec(
-                    type=_infer_spark_type(field.dataType, data, field.name),
-                    name=field.name,
-                    # Avoid setting required field for spark dataframe
-                    # as the default value for spark df nullable is True
-                    # which counterparts to default required=True in ColSpec
-                )
-                for field in data.schema.fields
-            ]
-        )
+        schema = Schema([
+            ColSpec(
+                type=_infer_spark_type(field.dataType, data, field.name),
+                name=field.name,
+                # Avoid setting required field for spark dataframe
+                # as the default value for spark df nullable is True
+                # which counterparts to default required=True in ColSpec
+            )
+            for field in data.schema.fields
+        ])
     elif isinstance(data, list):
         # Assume list as a single column
         # List[DataType]
@@ -463,7 +468,7 @@ def _infer_numpy_dtype(dtype) -> DataType:
 
     if dtype.kind == "b":
         return DataType.boolean
-    elif dtype.kind == "i" or dtype.kind == "u":
+    elif dtype.kind in {"i", "u"}:
         if dtype.itemsize < 4 or (dtype.kind == "i" and dtype.itemsize == 4):
             return DataType.integer
         elif dtype.itemsize < 8 or (dtype.kind == "i" and dtype.itemsize == 8):
@@ -490,7 +495,8 @@ def _infer_numpy_dtype(dtype) -> DataType:
 def _is_none_or_nan(x):
     if isinstance(x, float):
         return np.isnan(x)
-    return x is None
+    # NB: We can't use pd.isna() because the input can be a series.
+    return x is None or x is pd.NA or x is pd.NaT
 
 
 def _infer_required(col) -> bool:
@@ -516,7 +522,6 @@ def _infer_pandas_column(col: pd.Series) -> DataType:
         except Exception as e:
             # For backwards compatibility, we fall back to string
             # if the provided array is of string type
-            # This is for diviner test where df field is ('key2', 'key1', 'key0')
             if pd.api.types.is_string_dtype(col):
                 return DataType.string
             raise MlflowException(f"Failed to infer schema for pandas.Series {col}. Error: {e}")
@@ -584,7 +589,8 @@ def _infer_spark_type(x, data=None, col_name=None) -> DataType:
             )
 
         merged_keys = (
-            data.selectExpr(f"map_keys({col_name}) as keys")
+            data
+            .selectExpr(f"map_keys({col_name}) as keys")
             .agg(collect_list(col("keys")).alias("merged_keys"))
             .head()
             .merged_keys
