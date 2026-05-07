@@ -81,6 +81,22 @@ Each concept has its own page. Use these as references rather than reading top t
 - [ChatModel & Agents — the pyfunc agent runtime](concepts/chatmodel-agents.html)
 - [AI Gateway — unified LLM endpoints](concepts/gateway.html)
 
+## Building MLflow-anchored platforms on AWS
+
+A separate series of architectural deep-dives covering how to deploy MLflow inside an Amazon-scale organisation on top of SageMaker and Bedrock. Written from the perspective of an architecture council (platform tech lead + SRE + security + ML researcher + FinOps), with concrete reference architectures, constraint matrices, and decision trees.
+
+- [Series index — ML Platforms on AWS](aws-platforms/README.html)
+- [00 — Architectural thinking for ML platforms](aws-platforms/00-architectural-thinking.html)
+- [01 — The 12 platform layers](aws-platforms/01-platform-layers.html)
+- [02 — Team personas & scenarios](aws-platforms/02-team-personas-and-scenarios.html)
+- [03 — MLflow on SageMaker — deep dive](aws-platforms/03-mlflow-on-sagemaker.html)
+- [04 — MLflow with Bedrock — deep dive](aws-platforms/04-mlflow-with-bedrock.html)
+- [05 — Constraints → architecture matrix](aws-platforms/05-constraints-impact-matrix.html)
+- [06 — Multi-tenant platform patterns](aws-platforms/06-multi-tenant-platform.html)
+- [07 — Compliance & data residency](aws-platforms/07-compliance-data-residency.html)
+- [08 — Cost & FinOps for ML platforms](aws-platforms/08-cost-and-finops.html)
+- [09 — Decision framework](aws-platforms/09-decision-framework.html)
+
 ## Cross-cutting architectural patterns
 
 The two platforms share a small set of recurring patterns. Recognising them early makes the rest of the codebase fall into place:
