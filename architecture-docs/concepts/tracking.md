@@ -28,18 +28,26 @@ The same `tracking_uri` configuration governs all of them. They land in the same
 
 ## 2. The three layers
 
-```
-fluent.py            ── start_run, log_metric, log_param, log_artifact, log_model, autolog
-   │                    Holds the active run in a thread-local + RunContextProvider chain
-   ▼
-client.py            ── MlflowClient: every fluent call has a 1:1 method here
-   │                    Adds explicit `run_id` parameters and methods that fluent doesn’t expose
-   ▼
-_tracking_service/   ── TrackingServiceClient: dispatch to a Store implementation
-client.py            ── Selects FileStore / SqlAlchemyStore / RestStore based on tracking_uri
-   │
-   ▼
-store/tracking/      ── AbstractStore subclasses
+```mermaid
+flowchart TB
+    classDef api fill:#e3f2fd,stroke:#1976d2,color:#0d47a1;
+    classDef svc fill:#fff3e0,stroke:#f57c00,color:#e65100;
+    classDef store fill:#e8f5e9,stroke:#388e3c,color:#1b5e20;
+
+    User[Your code<br/>mlflow.log_metric&#40;'loss', 0.1&#41;]
+    Fluent[mlflow/tracking/fluent.py<br/>active run thread-local<br/>start_run · log_* · autolog]:::api
+    Client[mlflow/tracking/client.py<br/>MlflowClient — run_id-driven CRUD]:::api
+    Service[mlflow/tracking/_tracking_service/client.py<br/>TrackingServiceClient — RPC dispatch]:::svc
+    Abstract[mlflow/store/tracking/abstract_store.py<br/>AbstractStore contract]:::svc
+
+    File[FileStore<br/>YAML/JSON on disk]:::store
+    SQL[SqlAlchemyStore<br/>Postgres · MySQL · SQLite]:::store
+    REST[RestStore<br/>remote MLflow server]:::store
+
+    User --> Fluent --> Client --> Service --> Abstract
+    Abstract --> File
+    Abstract --> SQL
+    Abstract --> REST
 ```
 
 ### 2.1 Fluent — `mlflow/tracking/fluent.py`

@@ -1,0 +1,26 @@
+<!-- Mermaid renders ```mermaid fenced code blocks into inline SVG. -->
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>
+  document.addEventListener("DOMContentLoaded", function () {
+    // Convert kramdown-rendered <pre><code class="language-mermaid"> blocks
+    // into the <div class="mermaid"> form Mermaid expects.
+    document.querySelectorAll('pre > code.language-mermaid').forEach(function (block) {
+      var pre = block.parentNode;
+      var div = document.createElement('div');
+      div.className = 'mermaid';
+      div.textContent = block.textContent;
+      pre.parentNode.replaceChild(div, pre);
+    });
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'default',
+      flowchart: { curve: 'basis', useMaxWidth: true },
+      sequence: { useMaxWidth: true },
+      securityLevel: 'loose'
+    });
+  });
+</script>
+<style>
+  .mermaid { background: #fafbfc; border: 1px solid #e1e4e8; border-radius: 6px; padding: 16px; margin: 16px 0; text-align: center; }
+  .mermaid svg { max-width: 100%; height: auto; }
+</style>
