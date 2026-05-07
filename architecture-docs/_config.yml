@@ -1,0 +1,28 @@
+title: MLflow Architecture — Deep Dive
+description: An architectural deep dive into the MLflow ML platform and the GenAI/AI platform built into this fork.
+theme: jekyll-theme-cayman
+markdown: kramdown
+kramdown:
+  syntax_highlighter: rouge
+  input: GFM
+  hard_wrap: false
+  toc_levels: 1..3
+
+# This site lives in /architecture-docs — independent of the Sphinx site under /docs.
+# It is published to GitHub Pages by .github/workflows/architecture-docs.yml.
+baseurl: "/mlflow"
+url: "https://srikanthvelpuri.github.io"
+
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
+
+include:
+  - concepts
+
+exclude:
+  - README.md
+  - Gemfile
+  - Gemfile.lock
