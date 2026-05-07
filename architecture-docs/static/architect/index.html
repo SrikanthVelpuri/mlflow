@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Architect Guide &mdash; MLflow Deep Dive</title>
+<meta name="description" content="The Platform Architect Guide — split into focused chapters for storage, packaging, serving, tracing, agents, and operations.">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+
+<div class="shell">
+
+<aside class="sidebar">
+  <h1>Architect&nbsp;Guide</h1>
+  <nav>
+    <a href="../index.html">&larr; Overview</a>
+    <div class="section-label">Chapters</div>
+    <a href="index.html" class="active">0. Architect overview</a>
+    <a href="storage.html">1. Storage layer</a>
+    <a href="packaging.html">2. Packaging &amp; registry</a>
+    <a href="serving.html">3. Projects &amp; serving</a>
+    <a href="tracing.html">4. Tracing &amp; auto-tracing</a>
+    <a href="agents.html">5. Agents, gateway, eval</a>
+    <a href="operations.html">6. Operations &amp; build-vs-buy</a>
+    <div class="section-label">Other</div>
+    <a href="../cheatsheet.html">Cheat sheet</a>
+    <a href="../architect-guide.html">Single-page version</a>
+    <a href="../user-guide.html">User Guide</a>
+    <a href="../interview-prep.html">Interview Prep</a>
+  </nav>
+</aside>
+
+<main>
+
+<p class="crumbs"><a href="../index.html">Overview</a> &rsaquo; Architect Guide</p>
+
+<h1>Architect Guide</h1>
+<p class="subtitle">The platform deep dive, split into six focused chapters. Read in order, or jump to the chapter that matches the decision you're making this week. Each chapter ends with a roundtable; each one contains the diagrams that belong to its domain.</p>
+
+<h2>Chapters</h2>
+
+<div class="chapter-grid">
+  <a class="chapter-card" href="storage.html">
+    <div class="num">CHAPTER 1</div>
+    <h4>Storage layer</h4>
+    <p>Tracking store, artifact backends, async logging queue. The data plane.</p>
+  </a>
+  <a class="chapter-card" href="packaging.html">
+    <div class="num">CHAPTER 2</div>
+    <h4>Packaging &amp; registry</h4>
+    <p>MLmodel format, flavors, pyfunc, signatures, registered models, aliases vs stages.</p>
+  </a>
+  <a class="chapter-card" href="serving.html">
+    <div class="num">CHAPTER 3</div>
+    <h4>Projects &amp; serving</h4>
+    <p>MLproject reproducibility, the pyfunc scoring server, deployment plugins.</p>
+  </a>
+  <a class="chapter-card" href="tracing.html">
+    <div class="num">CHAPTER 4</div>
+    <h4>Tracing &amp; auto-tracing</h4>
+    <p>Span data model, private TracerProvider, the safe_patch pattern across 14+ SDKs.</p>
+  </a>
+  <a class="chapter-card" href="agents.html">
+    <div class="num">CHAPTER 5</div>
+    <h4>Agents, gateway, eval</h4>
+    <p>ChatModel as typed pyfunc, the AI Gateway, the eval-trace closed loop.</p>
+  </a>
+  <a class="chapter-card" href="operations.html">
+    <div class="num">CHAPTER 6</div>
+    <h4>Operations &amp; build-vs-buy</h4>
+    <p>Multi-tenancy, cost &amp; observability, comparison with the wider landscape, the cheat sheet.</p>
+  </a>
+</div>
+
+<h2>The architectural thesis</h2>
+<p>Most ML platforms accumulate by accretion: a tracking tool, a registry, a model server, a feature store, a tracing tool — six things, six APIs, six contracts. MLflow's bet is the opposite. <strong>One contract, many backends, many domains.</strong> The same store interface persists a sklearn run and an Anthropic LLM trace. The same scoring server hosts an XGBoost model and a multi-step agent. The same registry pins a fine-tuned transformer and a 1990s linear regression to a "champion" alias.</p>
+
+<p>The architectural moves that make this possible are small and repeated:</p>
+<ul>
+  <li>An <strong>AbstractStore</strong> interface for every persistent thing (tracking, registry, artifacts).</li>
+  <li>A <strong>URI scheme registry</strong> so the right backend is chosen by the URI you pass.</li>
+  <li>A <strong>flavor pattern</strong> so every framework adapter exposes the same trio of <code>save_model</code> / <code>log_model</code> / <code>load_model</code>.</li>
+  <li>A universal <strong>pyfunc loader</strong> so anything callable becomes <code>predict(x)</code>.</li>
+  <li><strong>safe_patch</strong> as the single mechanism for both autologging and auto-tracing.</li>
+</ul>
+
+<div class="callout gold">
+  <div class="label">Architect's mantra</div>
+  <p>Don't add a noun without first asking which existing noun it can become. Trace became a sibling of Run, not a parallel system. ChatModel became a subclass of PythonModel, not a new package. The discipline of "minimum new concepts" is what keeps the surface area shippable.</p>
+</div>
+
+<h2>The primitives, visualised</h2>
+<p>Every line of code in this repo serializes, queries, exports, or routes one of these. Five of them belong to the original ML platform; the sixth (Trace) is the GenAI extension and is a sibling of Run, not a child.</p>
+
+<div class="diagram">
+  <svg viewBox="0 0 800 440" role="img" aria-label="MLflow primitives map">
+    <defs>
+      <marker id="arr1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6b7280"/>
+      </marker>
+    </defs>
+
+    <!-- Experiment (top-left) -->
+    <rect class="box ml" x="50" y="40" width="160" height="50" rx="6"/>
+    <text class="title" x="130" y="63" text-anchor="middle">Experiment</text>
+    <text class="small" x="130" y="80" text-anchor="middle">named bucket of runs</text>
+
+    <!-- Trace (top-right, AI) -->
+    <rect class="box ai" x="590" y="40" width="160" height="50" rx="6"/>
+    <text class="title" x="670" y="63" text-anchor="middle">Trace</text>
+    <text class="small" x="670" y="80" text-anchor="middle">tree of typed Spans (AI)</text>
+
+    <!-- Run (center) -->
+    <rect class="box hl" x="320" y="160" width="160" height="60" rx="6"/>
+    <text class="title" x="400" y="186" text-anchor="middle">Run</text>
+    <text class="small" x="400" y="203" text-anchor="middle">one execution</text>
+
+    <!-- Metric/Param/Tag (right of Run) -->
+    <rect class="box ml" x="560" y="155" width="190" height="70" rx="6"/>
+    <text class="title" x="655" y="178" text-anchor="middle">Metric &middot; Param &middot; Tag</text>
+    <text class="small" x="655" y="195" text-anchor="middle">numeric &middot; static &middot; mutable</text>
+    <text class="small" x="655" y="210" text-anchor="middle">indexed by (run_uuid, key, step)</text>
+
+    <!-- Model (bottom-left) -->
+    <rect class="box ml" x="170" y="280" width="160" height="50" rx="6"/>
+    <text class="title" x="250" y="303" text-anchor="middle">Model</text>
+    <text class="small" x="250" y="319" text-anchor="middle">MLmodel manifest + weights</text>
+
+    <!-- Artifact (bottom-center) -->
+    <rect class="box ml" x="370" y="280" width="160" height="50" rx="6"/>
+    <text class="title" x="450" y="303" text-anchor="middle">Artifact</text>
+    <text class="small" x="450" y="319" text-anchor="middle">any logged file</text>
+
+    <!-- RegisteredModel + Version (bottom) -->
+    <rect class="box ml" x="170" y="370" width="360" height="50" rx="6"/>
+    <text class="title" x="350" y="393" text-anchor="middle">RegisteredModel + Version</text>
+    <text class="small" x="350" y="409" text-anchor="middle">alias: champion, challenger, shadow, eu-prod, &hellip;</text>
+
+    <!-- arrows -->
+    <!-- Experiment -> Run -->
+    <path class="arrow" d="M 200 90 Q 250 130 320 175" marker-end="url(#arr1)"/>
+    <!-- Run -> Metric/Param/Tag -->
+    <path class="arrow" d="M 480 190 L 560 190" marker-end="url(#arr1)"/>
+    <!-- Run -> Model -->
+    <path class="arrow" d="M 360 220 Q 320 250 270 280" marker-end="url(#arr1)"/>
+    <!-- Run -> Artifact -->
+    <path class="arrow" d="M 420 220 Q 430 250 445 280" marker-end="url(#arr1)"/>
+    <!-- Model -> Registered -->
+    <path class="arrow" d="M 250 330 L 270 370" marker-end="url(#arr1)"/>
+    <!-- Trace ~ Run (sibling, dashed) -->
+    <path class="arrow dashed" d="M 600 90 Q 540 140 480 175" marker-end="url(#arr1)"/>
+    <text class="small" x="540" y="118" text-anchor="middle" style="fill:var(--ai);">sibling, not child</text>
+  </svg>
+  <div class="caption">The six primitives. Solid arrows = ownership / parent-child. Dashed arrow = sibling: a Trace lives at the same level as a Run, both owned by an Experiment.</div>
+</div>
+
+<table>
+  <thead><tr><th>Primitive</th><th>Owns</th><th>Where it lives</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Experiment</strong></td><td>A bucket of runs</td><td><code>mlflow/entities/experiment.py</code></td></tr>
+    <tr><td><strong>Run</strong></td><td>One execution: params in, metrics + artifacts out</td><td><code>mlflow/entities/run.py</code></td></tr>
+    <tr><td><strong>Model</strong></td><td>A framework-agnostic package (the <code>MLmodel</code> file + weights)</td><td><code>mlflow/models/model.py</code></td></tr>
+    <tr><td><strong>RegisteredModel + Version</strong></td><td>A named, versioned, alias-able pointer to a Model</td><td><code>mlflow/entities/model_registry/</code></td></tr>
+    <tr><td><strong>Artifact</strong></td><td>Any file logged against a run</td><td>routed through the artifact registry</td></tr>
+    <tr><td><strong>Trace</strong> <span class="pill ai">AI</span></td><td>A tree of spans for one logical LLM/agent invocation</td><td><code>mlflow/entities/span.py</code> + <code>trace*.py</code></td></tr>
+  </tbody>
+</table>
+
+<div class="roundtable">
+  <div class="topic">Why so few primitives?</div>
+  <div class="msg arch">
+    <div class="who"><span class="avatar">A</span> Architect</div>
+    <div class="body">Every new noun multiplies the surface: REST endpoints, SDK methods, UI tabs, docs, RBAC scopes. Six is already pushing it. We absorbed traces into the run-shaped storage rather than making them a parallel domain.</div>
+  </div>
+  <div class="msg dba">
+    <div class="who"><span class="avatar">D</span> Storage</div>
+    <div class="body">From my side, fewer primitives means fewer tables to migrate. <code>SqlAlchemyStore</code> only has to know about runs, metrics, params, tags, registered models, model versions, and now traces and spans. Any feature that doesn't fit there forces a schema change.</div>
+  </div>
+  <div class="msg pm">
+    <div class="who"><span class="avatar">P</span> PM</div>
+    <div class="body">Users don't think in primitives, they think in tasks: "I want to compare two prompts." We can deliver that on top of three primitives (Trace, Assessment, Run) without growing the data model — that's the leverage.</div>
+  </div>
+</div>
+
+<h2>How to read this guide</h2>
+<ol>
+  <li>If you're <strong>new</strong>: read in order, chapters 1 → 6.</li>
+  <li>If you're <strong>making a specific decision</strong>: jump to the relevant chapter; the cheat sheet at the end of <a href="operations.html#cheatsheet">Operations</a> is the index.</li>
+  <li>If you want a <strong>printable single-page version</strong> for offline review: <a href="../architect-guide.html">the monolithic guide</a> still exists.</li>
+  <li>If you want a <strong>last-minute revision</strong>: skip to the <a href="../cheatsheet.html">cheat sheet</a>.</li>
+</ol>
+
+<footer class="page-footer">
+  <p>Continue to <a href="storage.html">Chapter 1: Storage layer &rarr;</a></p>
+</footer>
+
+</main>
+</div>
+
+</body>
+</html>

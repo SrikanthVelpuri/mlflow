@@ -8,6 +8,7 @@ from mlflow.metrics.genai import EvaluationExample, answer_similarity
 
 assert "OPENAI_API_KEY" in os.environ, "Please set the OPENAI_API_KEY environment variable."
 
+mlflow.set_tracking_uri("http://localhost:5000")
 
 # testing with OpenAI gpt-4o-mini
 example = EvaluationExample(
@@ -19,7 +20,7 @@ example = EvaluationExample(
     justification="The definition effectively explains what MLflow is "
     "its purpose, and its developer. It could be more concise for a 5-score.",
     grading_context={
-        "ground_truth": "MLflow is an open-source platform for managing "
+        "targets": "MLflow is an open-source platform for managing "
         "the end-to-end machine learning (ML) lifecycle. It was developed by Databricks, "
         "a company that specializes in big data and machine learning solutions. MLflow is "
         "designed to address the challenges that data scientists and machine learning "
@@ -55,12 +56,12 @@ with mlflow.start_run() as run:
     )
 
     results = mlflow.evaluate(
-        logged_model.model_uri,
-        eval_df,
-        targets="ground_truth",
-        model_type="question-answering",
-        extra_metrics=[answer_similarity_metric],
-    )
+    logged_model.model_uri,
+    eval_df,
+    targets="ground_truth",  # Change this to match your DataFrame column name
+    model_type="question-answering",
+    extra_metrics=[answer_similarity_metric],
+)
     print(results)
 
     eval_table = results.tables["eval_results_table"]

@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Storage Layer &mdash; Architect Guide</title>
+<meta name="description" content="The MLflow storage layer: tracking store, artifact backends, async logging queue. Architecture, tradeoffs, and roundtables.">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+
+<div class="shell">
+
+<aside class="sidebar">
+  <h1>Architect&nbsp;Guide</h1>
+  <nav>
+    <a href="../index.html">&larr; Overview</a>
+    <div class="section-label">Chapters</div>
+    <a href="index.html">0. Architect overview</a>
+    <a href="storage.html" class="active">1. Storage layer</a>
+    <a href="packaging.html">2. Packaging &amp; registry</a>
+    <a href="serving.html">3. Projects &amp; serving</a>
+    <a href="tracing.html">4. Tracing &amp; auto-tracing</a>
+    <a href="agents.html">5. Agents, gateway, eval</a>
+    <a href="operations.html">6. Operations &amp; build-vs-buy</a>
+    <div class="section-label">Other</div>
+    <a href="../cheatsheet.html">Cheat sheet</a>
+    <a href="../user-guide.html">User Guide</a>
+    <a href="../interview-prep.html">Interview Prep</a>
+  </nav>
+</aside>
+
+<main>
+
+<p class="crumbs"><a href="../index.html">Overview</a> &rsaquo; <a href="index.html">Architect Guide</a> &rsaquo; Storage</p>
+
+<h1>Chapter 1 &mdash; Storage layer</h1>
+<p class="subtitle">The data plane. Three concerns: where rows go (tracking store), where bytes go (artifact backends), and how to log without slowing down training (the async queue).</p>
+
+<h2 id="store-pattern">The store pattern</h2>
+<p>The contract that makes everything else portable. <code>AbstractStore</code> in <code>mlflow/store/tracking/abstract_store.py</code> defines about thirty operations: <code>create_experiment</code>, <code>search_runs</code>, <code>log_batch</code>, <code>get_metric_history</code>, <code>record_logged_model</code>, etc. New backends only need to subclass this — the REST API and the Python client do not change.</p>
+
+<div class="diagram">
+  <svg viewBox="0 0 800 320" role="img" aria-label="Store pattern: AbstractStore with three implementations">
+    <defs>
+      <marker id="arrS" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6b7280"/>
+      </marker>
+    </defs>
+    <!-- Top: client API -->
+    <rect class="box" x="240" y="20" width="320" height="50" rx="6"/>
+    <text class="title" x="400" y="43" text-anchor="middle">MlflowClient.log_metric(...)</text>
+    <text class="small" x="400" y="60" text-anchor="middle">tracking client API &mdash; the only call site you write</text>
+
+    <!-- Middle: AbstractStore -->
+    <rect class="box hl" x="240" y="115" width="320" height="56" rx="6"/>
+    <text class="title" x="400" y="139" text-anchor="middle">AbstractStore (interface)</text>
+    <text class="small" x="400" y="158" text-anchor="middle">~30 abstract methods &mdash; the contract</text>
+
+    <!-- arrows top-to-middle -->
+    <path class="arrow" d="M 400 70 L 400 115" marker-end="url(#arrS)"/>
+
+    <!-- Bottom: three implementations -->
+    <rect class="box" x="40"  y="220" width="220" height="80" rx="6"/>
+    <text class="title" x="150" y="244" text-anchor="middle">FileStore</text>
+    <text class="small" x="150" y="262" text-anchor="middle">YAML / JSON on disk</text>
+    <text class="small" x="150" y="276" text-anchor="middle">laptop, CI, demos</text>
+    <text class="small" x="150" y="290" text-anchor="middle" style="fill:var(--warn);">awful for concurrent writes</text>
+
+    <rect class="box ml" x="290" y="220" width="220" height="80" rx="6"/>
+    <text class="title" x="400" y="244" text-anchor="middle">SqlAlchemyStore</text>
+    <text class="small" x="400" y="262" text-anchor="middle">Postgres &middot; MySQL &middot; SQLite &middot; MSSQL</text>
+    <text class="small" x="400" y="276" text-anchor="middle">production default</text>
+    <text class="small" x="400" y="290" text-anchor="middle">Alembic migrations under <tspan font-family="var(--font-mono)" font-size="9">store/db_migrations/</tspan></text>
+
+    <rect class="box" x="540" y="220" width="220" height="80" rx="6"/>
+    <text class="title" x="650" y="244" text-anchor="middle">RestStore</text>
+    <text class="small" x="650" y="262" text-anchor="middle">talks to a remote</text>
+    <text class="small" x="650" y="276" text-anchor="middle">MLflow server</text>
+    <text class="small" x="650" y="290" text-anchor="middle">RPC over the same proto</text>
+
+    <!-- arrows middle to three -->
+    <path class="arrow" d="M 320 171 Q 240 200 150 220" marker-end="url(#arrS)"/>
+    <path class="arrow" d="M 400 171 L 400 220" marker-end="url(#arrS)"/>
+    <path class="arrow" d="M 480 171 Q 560 200 650 220" marker-end="url(#arrS)"/>
+  </svg>
+  <div class="caption">One interface, three (or more) backends. The same client code runs against all of them; the URI you set decides the implementation.</div>
+</div>
+
+<h2 id="layers">Three layers &mdash; fluent, client, store</h2>
+<p>The tracking surface is intentionally a thin pipeline. The fluent API is convenient but optional: every fluent call has a direct equivalent on <code>MlflowClient</code>. Internally the fluent module just looks up the active run id from a thread-local and calls the client.</p>
+
+<div class="diagram">
+  <svg viewBox="0 0 600 480" role="img" aria-label="Tracking request flow from your code to the store">
+    <defs>
+      <marker id="arrL" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6b7280"/>
+      </marker>
+    </defs>
+
+    <rect class="box" x="100" y="20" width="400" height="50" rx="6"/>
+    <text class="title" x="300" y="43" text-anchor="middle">your code</text>
+    <text class="small" x="300" y="60" text-anchor="middle"><tspan font-family="var(--font-mono)">mlflow.log_metric("loss", 0.1)</tspan></text>
+
+    <path class="arrow" d="M 300 70 L 300 105" marker-end="url(#arrL)"/>
+
+    <rect class="box" x="100" y="105" width="400" height="50" rx="6"/>
+    <text class="title" x="300" y="128" text-anchor="middle">mlflow/tracking/fluent.py</text>
+    <text class="small" x="300" y="145" text-anchor="middle">thread-local active run, <tspan font-family="var(--font-mono)">start_run</tspan>, <tspan font-family="var(--font-mono)">log_*</tspan></text>
+
+    <path class="arrow" d="M 300 155 L 300 190" marker-end="url(#arrL)"/>
+
+    <rect class="box" x="100" y="190" width="400" height="50" rx="6"/>
+    <text class="title" x="300" y="213" text-anchor="middle">mlflow/tracking/client.py</text>
+    <text class="small" x="300" y="230" text-anchor="middle">MlflowClient &mdash; explicit run_id-driven CRUD</text>
+
+    <path class="arrow" d="M 300 240 L 300 275" marker-end="url(#arrL)"/>
+
+    <rect class="box" x="100" y="275" width="400" height="50" rx="6"/>
+    <text class="title" x="300" y="298" text-anchor="middle">tracking/_tracking_service/client.py</text>
+    <text class="small" x="300" y="315" text-anchor="middle">TrackingServiceClient &mdash; RPC translation</text>
+
+    <path class="arrow" d="M 300 325 L 300 360" marker-end="url(#arrL)"/>
+
+    <rect class="box hl" x="100" y="360" width="400" height="50" rx="6"/>
+    <text class="title" x="300" y="383" text-anchor="middle">store/tracking/abstract_store.py</text>
+    <text class="small" x="300" y="400" text-anchor="middle">AbstractStore &mdash; the contract</text>
+
+    <text class="small" x="300" y="445" text-anchor="middle">FileStore &middot; SqlAlchemyStore &middot; RestStore</text>
+  </svg>
+  <div class="caption">Every <code>log_*</code> call traverses these layers. Each is a thin shim over the next.</div>
+</div>
+
+<h2 id="contract">The store contract</h2>
+<p><code>AbstractStore</code> defines the operations every backend must implement. <code>FileStore</code> writes one YAML/JSON file per entity — good for laptops and CI, awful for concurrent writes. <code>SqlAlchemyStore</code> is the production backend — it owns the schema (<code>SqlExperiment</code>, <code>SqlRun</code>, <code>SqlMetric</code>, <code>SqlParam</code>, <code>SqlTag</code>, etc.) and uses Alembic migrations under <code>mlflow/store/db_migrations/</code>.</p>
+
+<h3>Schema essentials</h3>
+<p>The five tables that carry 90% of traffic:</p>
+<pre><code>experiments      (experiment_id, name, artifact_location, lifecycle_stage, ...)
+runs             (run_uuid, experiment_id, user_id, status, start_time, end_time, ...)
+metrics          (run_uuid, key, value, timestamp, step)        -- append-only, indexed (run_uuid, key, step)
+params           (run_uuid, key, value)                          -- write-once
+tags             (run_uuid, key, value)                          -- mutable
+</code></pre>
+
+<div class="callout warn">
+  <div class="label">Common pitfall</div>
+  <p>People forget metric history is a per-step append. A 100-epoch training that logs 30 metrics per step writes 3,000 rows. A daily cron that re-logs the same metric 1,440 times is normal. Plan for that — and enable the async logging queue.</p>
+</div>
+
+<div class="roundtable">
+  <div class="topic">Roundtable &mdash; Why not Mongo / DynamoDB / Cassandra?</div>
+  <div class="msg arch">
+    <div class="who"><span class="avatar">A</span> Architect</div>
+    <div class="body">The shape of our queries is relational: filter runs by experiment, join to metrics, sort by created. <code>WHERE experiment_id = ? AND status = 'FINISHED' ORDER BY start_time DESC</code> is the hot path. SQL with a few indexes is hard to beat there.</div>
+  </div>
+  <div class="msg dba">
+    <div class="who"><span class="avatar">D</span> Storage</div>
+    <div class="body">DynamoDB would force us to invent secondary indexes for every search facet (status, run_name, tag value). And metrics are append-heavy time series — that wants either a relational table with the right composite key (<code>run_uuid, metric_key, step</code>) or a true time-series store. We picked the cheaper choice.</div>
+  </div>
+  <div class="msg sre">
+    <div class="who"><span class="avatar">S</span> SRE</div>
+    <div class="body">Postgres is operational table stakes everywhere. Every cloud has managed Postgres with PITR, replicas, and backup tooling. Adopting a NoSQL store would offload state but onboard a new oncall surface.</div>
+  </div>
+  <div class="msg mle">
+    <div class="who"><span class="avatar">M</span> ML&nbsp;Engineer</div>
+    <div class="body">There <em>is</em> a future where metric history outgrows row-per-point storage. At one customer we hit 80M rows in <code>metrics</code> in three months. That's where you want a Timescale/Druid/Influx side-car &mdash; but as a partition off SQL, not a rewrite.</div>
+  </div>
+  <div class="msg arch">
+    <div class="who"><span class="avatar">A</span> Architect</div>
+    <div class="body">Right &mdash; and the AbstractStore boundary is exactly where you'd insert it. The "compose a metric store under SqlAlchemyStore" play is a six-month project, not a six-quarter one. That's the value of the contract.</div>
+  </div>
+</div>
+
+<h2 id="artifacts">Artifact backends</h2>
+<p>Models, plots, datasets &mdash; anything that's a file &mdash; land in an artifact repository, picked by URI scheme. Same store-pattern dance, applied to bytes instead of rows.</p>
+
+<table>
+  <thead><tr><th>Scheme</th><th>Implementation</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td><code>file://</code> / local path</td><td><code>LocalArtifactRepository</code></td><td>Dev. Don't ship.</td></tr>
+    <tr><td><code>s3://</code></td><td><code>S3ArtifactRepository</code></td><td>Most common. Boto3.</td></tr>
+    <tr><td><code>gs://</code></td><td><code>GCSArtifactRepository</code></td><td>Same shape, different SDK.</td></tr>
+    <tr><td><code>wasbs://</code> / <code>abfss://</code></td><td>Azure repos</td><td>Blob &amp; ADLS Gen2.</td></tr>
+    <tr><td><code>dbfs:/</code> / <code>databricks://</code></td><td>DBFS / Unity Catalog</td><td>Tightly integrated; UC adds governance.</td></tr>
+    <tr><td><code>r2://</code> / <code>http(s)://</code> / <code>ftp://</code> / <code>sftp://</code></td><td>Edge cases</td><td>Real, but rare.</td></tr>
+  </tbody>
+</table>
+
+<h3>The contract every backend honors</h3>
+<pre><code>class ArtifactRepository(ABC):
+    def log_artifact(local_file, artifact_path=None): ...
+    def log_artifacts(local_dir, artifact_path=None): ...
+    def list_artifacts(path=None) -&gt; list[FileInfo]: ...
+    def download_artifacts(artifact_path, dst_path=None) -&gt; str: ...
+    def delete_artifacts(artifact_path=None): ...</code></pre>
+<p>Five methods. That's the entire surface a new backend has to implement.</p>
+
+<div class="roundtable">
+  <div class="topic">Roundtable &mdash; Picking the right artifact backend</div>
+  <div class="msg ds">
+    <div class="who"><span class="avatar">N</span> Data&nbsp;Scientist</div>
+    <div class="body">I just want my notebook to <code>log_artifact("plot.png")</code> and find it later. Anything that needs IAM JSON ahead of time is a non-starter for prototyping.</div>
+  </div>
+  <div class="msg sec">
+    <div class="who"><span class="avatar">X</span> Security</div>
+    <div class="body">"Anything that doesn't need IAM" is also "anything that has no audit log." You want server-side encryption, bucket policies that block public ACLs, and CloudTrail on read. Pick a backend the security team has tooling for.</div>
+  </div>
+  <div class="msg sre">
+    <div class="who"><span class="avatar">S</span> SRE</div>
+    <div class="body">For multi-region resilience, S3 with cross-region replication is the de-facto answer. GCS multi-region buckets are cleaner if you're on GCP. DBFS is fine if you're a Databricks shop, but consider that you've now coupled two systems' uptime.</div>
+  </div>
+  <div class="msg dba">
+    <div class="who"><span class="avatar">D</span> Storage</div>
+    <div class="body">One quiet thing: artifact downloads <em>during serving</em> are on the hot path. If the model server is in <code>us-east-1</code> and the bucket is in <code>eu-west-2</code>, your cold-start latency just bought a transatlantic round trip. Co-locate or pre-warm.</div>
+  </div>
+  <div class="msg mle">
+    <div class="who"><span class="avatar">M</span> ML&nbsp;Engineer</div>
+    <div class="body">For air-gapped deployments, MinIO speaks the S3 API and slots into <code>S3ArtifactRepository</code> unchanged. For the on-prem question, that's the answer most of the time.</div>
+  </div>
+</div>
+
+<h2 id="async">The async logging queue</h2>
+<p>Synchronous logging is a footgun for any tight training loop. <code>AsyncLoggingQueue</code> (in <code>mlflow/utils/async_logging/</code>) buffers calls and flushes them with <code>log_batch</code> &mdash; one round-trip per N points instead of N round-trips.</p>
+
+<div class="pros-cons">
+  <div class="col pros">
+    <h4>Why it's there</h4>
+    <ul>
+      <li>Training loop stays at training-loop speed.</li>
+      <li>Network blips don't block <code>fit()</code>.</li>
+      <li>Backend gets batched writes &mdash; friendlier to Postgres.</li>
+    </ul>
+  </div>
+  <div class="col cons">
+    <h4>What it costs</h4>
+    <ul>
+      <li>Last-second metrics can be lost on a hard crash.</li>
+      <li>Memory growth if the worker thread starves.</li>
+      <li>UI sees data with a small lag.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="callout">
+  <div class="label">Design</div>
+  <p>Flushed on <code>end_run</code> and at interpreter exit (via <code>atexit</code>). Per-run queue with a single worker; on shutdown, the queue drains synchronously so completed runs commit cleanly. Failures during a flush bubble up as warnings &mdash; they do not crash training.</p>
+</div>
+
+<footer class="page-footer">
+  <p>Continue to <a href="packaging.html">Chapter 2: Packaging &amp; registry &rarr;</a> &middot; back to <a href="index.html">Architect overview</a></p>
+</footer>
+
+</main>
+</div>
+
+</body>
+</html>

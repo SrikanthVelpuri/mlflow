@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Operations &amp; Build-vs-Buy &mdash; Architect Guide</title>
+<meta name="description" content="Multi-tenancy, cost & observability, comparison with the wider landscape, and the architect's tradeoffs cheat sheet.">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+
+<div class="shell">
+
+<aside class="sidebar">
+  <h1>Architect&nbsp;Guide</h1>
+  <nav>
+    <a href="../index.html">&larr; Overview</a>
+    <div class="section-label">Chapters</div>
+    <a href="index.html">0. Architect overview</a>
+    <a href="storage.html">1. Storage layer</a>
+    <a href="packaging.html">2. Packaging &amp; registry</a>
+    <a href="serving.html">3. Projects &amp; serving</a>
+    <a href="tracing.html">4. Tracing &amp; auto-tracing</a>
+    <a href="agents.html">5. Agents, gateway, eval</a>
+    <a href="operations.html" class="active">6. Operations &amp; build-vs-buy</a>
+    <div class="section-label">Other</div>
+    <a href="../cheatsheet.html">Cheat sheet</a>
+    <a href="../user-guide.html">User Guide</a>
+    <a href="../interview-prep.html">Interview Prep</a>
+  </nav>
+</aside>
+
+<main>
+
+<p class="crumbs"><a href="../index.html">Overview</a> &rsaquo; <a href="index.html">Architect Guide</a> &rsaquo; Operations &amp; build-vs-buy</p>
+
+<h1>Chapter 6 &mdash; Operations &amp; build-vs-buy</h1>
+<p class="subtitle">The non-functional concerns that decide whether the platform survives contact with reality. Multi-tenancy, cost, observability, and an honest comparison with the alternatives you might pick instead.</p>
+
+<h2 id="multi-tenancy">Multi-tenancy and isolation</h2>
+<p>MLflow OSS doesn't ship multi-tenancy as a primitive &mdash; it ships <em>experiments</em> as the natural unit of isolation. How you turn that into "team A can't see team B's runs" is a deployment-layer choice.</p>
+
+<table>
+  <thead><tr><th>Approach</th><th>Pros</th><th>Cons</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>One MLflow server per team</td>
+      <td>Hard isolation. No accidental cross-reads.</td>
+      <td>N tracking servers to operate. No global view.</td>
+    </tr>
+    <tr>
+      <td>One server, one DB, RBAC at the proxy</td>
+      <td>Single pane of glass. Centralised ops.</td>
+      <td>Auth lives outside MLflow &mdash; proxy has to enforce per-experiment ACLs.</td>
+    </tr>
+    <tr>
+      <td>One server, schema-per-tenant</td>
+      <td>Hard data isolation, single deploy.</td>
+      <td>Custom store layer needed; not stock OSS.</td>
+    </tr>
+    <tr>
+      <td>Databricks-managed (MLflow on Unity Catalog)</td>
+      <td>RBAC, lineage, encryption baked in.</td>
+      <td>Vendor lock to Databricks.</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="roundtable">
+  <div class="topic">Roundtable &mdash; Building multi-tenancy on OSS MLflow</div>
+  <div class="msg arch">
+    <div class="who"><span class="avatar">A</span> Architect</div>
+    <div class="body">The pragmatic OSS path: one server, OIDC at an ingress proxy, experiment naming convention <code>{team}/{project}</code>, and a server-side filter that rejects requests reading other teams' experiments. Coarse, but ships in a sprint.</div>
+  </div>
+  <div class="msg sec">
+    <div class="who"><span class="avatar">X</span> Security</div>
+    <div class="body">"Convention plus proxy filter" is fine for trust-but-verify orgs. For regulated workloads (HIPAA, SOC2 with hard data segregation), one server per tenant &mdash; no shortcut.</div>
+  </div>
+  <div class="msg sre">
+    <div class="who"><span class="avatar">S</span> SRE</div>
+    <div class="body">If you go single-server, plan for the noisy-neighbour problem. One team's hyperparameter sweep can saturate the async log queue and starve everyone. Per-team rate limits at the ingress.</div>
+  </div>
+</div>
+
+<h2 id="cost">Cost &amp; observability</h2>
+<p>The cheapest hour you'll ever spend on this platform is wiring up the operator's view: which team is generating which load, how big is the tracking DB, how much S3 are we burning, what's the LLM cost per agent.</p>
+
+<h3>What to monitor</h3>
+<ul>
+  <li><strong>Tracking DB:</strong> row counts on <code>metrics</code>, <code>params</code>, <code>tags</code>, <code>traces</code>, <code>spans</code>; query p95 on <code>search_runs</code>; index bloat.</li>
+  <li><strong>Artifact storage:</strong> bytes per experiment, top-N largest models, cold-tier eligibility.</li>
+  <li><strong>Scoring server:</strong> p50/p95/p99 latency per model URI; signature validation rejection rate.</li>
+  <li><strong>AI Gateway:</strong> tokens-in / tokens-out / cost per route, per-team; rate-limit rejection rate; provider 5xx and timeout rate.</li>
+  <li><strong>Traces:</strong> span depth distribution; top-cost agents; tool-call frequencies.</li>
+</ul>
+
+<div class="callout warn">
+  <div class="label">The cost trap</div>
+  <p>Two patterns sneak up on bills: (1) people <code>log_artifact</code>ing whole datasets every run instead of pointing at a Dataset reference; (2) chatty agents that loop over tools and rack up gateway calls without circuit-breakers. Build alerting for "cost per run" and "cost per trace" early &mdash; it's easier than retroactive cleanup.</p>
+</div>
+
+<h2 id="buildvsbuy">Build vs buy &mdash; the bigger picture</h2>
+<p>MLflow is a single piece of a larger landscape. Some honest comparisons:</p>
+
+<table>
+  <thead><tr><th>Tool</th><th>Strongest at</th><th>When to prefer over MLflow</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Weights &amp; Biases</strong></td><td>Polished UI, sweeps, reports, collaboration</td><td>Smaller team, want a hosted experience, dashboards matter more than self-hosting</td></tr>
+    <tr><td><strong>Comet</strong></td><td>Similar to W&amp;B + on-prem option</td><td>Need a hosted-or-on-prem dial; want polished UX</td></tr>
+    <tr><td><strong>Neptune</strong></td><td>Fast metric viewer; metadata store</td><td>You log a lot of points and want responsive comparison views</td></tr>
+    <tr><td><strong>Vertex AI / SageMaker / Azure ML</strong></td><td>Vertically integrated training + serving</td><td>You're all-in on one cloud and don't want to operate the platform</td></tr>
+    <tr><td><strong>LangSmith / LangFuse / Helicone</strong></td><td>LLM-native observability and prompt mgmt</td><td>You want LLM-only and don't run classical ML</td></tr>
+    <tr><td><strong>BentoML / KServe / Seldon</strong></td><td>Production model serving at scale</td><td>You've outgrown the pyfunc scoring server</td></tr>
+    <tr><td><strong>DVC</strong></td><td>Data + model versioning in git</td><td>Code-first reproducibility; happy with git workflows</td></tr>
+    <tr><td><strong>Kubeflow</strong></td><td>Pipelines on K8s</td><td>You already live in Kubeflow; want pipeline-first</td></tr>
+  </tbody>
+</table>
+
+<div class="roundtable">
+  <div class="topic">Roundtable &mdash; When NOT to pick MLflow</div>
+  <div class="msg pm">
+    <div class="who"><span class="avatar">P</span> PM</div>
+    <div class="body">If we have three data scientists and no platform team, hosted W&amp;B is faster to value. The day the company has 30 people doing ML, the calculus inverts.</div>
+  </div>
+  <div class="msg arch">
+    <div class="who"><span class="avatar">A</span> Architect</div>
+    <div class="body">If we're an LLM-only shop with no classical ML pipeline, LangSmith + a thin model registry is a more focused stack. We'd lose MLflow's flavor breadth &mdash; but we don't use it.</div>
+  </div>
+  <div class="msg sre">
+    <div class="who"><span class="avatar">S</span> SRE</div>
+    <div class="body">If we're already on SageMaker for serving and don't need cross-cloud portability, the gravitational pull of one ecosystem wins. Mixed-cloud orgs are where MLflow's pluggability earns its keep.</div>
+  </div>
+  <div class="msg mle">
+    <div class="who"><span class="avatar">M</span> ML&nbsp;Engineer</div>
+    <div class="body">If we're just versioning models and don't need experiment tracking or tracing, DVC + a git-based deploy is leaner. MLflow is overkill for "I have one notebook and one prod model."</div>
+  </div>
+</div>
+
+<h2 id="cheatsheet">Tradeoffs cheat sheet</h2>
+<p>One row per decision the architect actually has to make. The full one-screen version is at <a href="../cheatsheet.html">cheatsheet.html</a>.</p>
+
+<table>
+  <thead><tr><th>Decision</th><th>Default</th><th>Why default</th><th>When to deviate</th></tr></thead>
+  <tbody>
+    <tr><td>Tracking store</td><td>Postgres via <code>SqlAlchemyStore</code></td><td>Operational maturity, indexable</td><td>Hosted service if no platform team; sharded SQL or Timescale at &gt; 100M metric rows</td></tr>
+    <tr><td>Artifact backend</td><td>S3/GCS/Azure native to your cloud</td><td>Co-locate with serving; cheap durability</td><td>MinIO for air-gapped; UC volumes if on Databricks</td></tr>
+    <tr><td>Async logging</td><td>On</td><td>Doesn't slow training; batched writes</td><td>Off only for one-shot scripts where loss-on-crash matters</td></tr>
+    <tr><td>Stages vs aliases</td><td>Aliases</td><td>Decoupled from a fixed lifecycle</td><td>Stay on stages only for legacy compatibility</td></tr>
+    <tr><td>Signature</td><td>Always set</td><td>Safe HTTP exposure; clear errors</td><td>Never deviate</td></tr>
+    <tr><td>Pyfunc as universal contract</td><td>Yes</td><td>Tools (eval, serve, deploy) only need pyfunc</td><td>Custom inference runtimes still wrap pyfunc</td></tr>
+    <tr><td>Scoring server</td><td>Local + dev</td><td>Zero-config, validates signature</td><td>Triton/Bento for high-QPS GPU serving</td></tr>
+    <tr><td>AI Gateway</td><td>Use it for any multi-provider work</td><td>Centralised keys, audit, rate-limits</td><td>Skip if you call only one provider and have your own proxy</td></tr>
+    <tr><td>Auto-tracing</td><td>On for SDKs you care about</td><td>Zero code change; uniform schema</td><td>Use first-class callbacks (LangChain) over patching where available</td></tr>
+    <tr><td>LLM-as-judge</td><td>Pair with human-rated calibration set</td><td>Catches drift in the judge itself</td><td>Skip judges entirely for high-stakes domains; use experts</td></tr>
+    <tr><td>Multi-tenancy</td><td>Server-per-team for hard isolation; one server + ingress RBAC for soft</td><td>Match isolation to compliance needs</td><td>Schema-per-tenant only with custom store</td></tr>
+  </tbody>
+</table>
+
+<div class="callout good">
+  <div class="label">Closing thought</div>
+  <p>Architecture is the discipline of <em>what you don't add</em>. The reason MLflow's GenAI surface didn't double the codebase is that almost every new capability extended an existing primitive. When you're tempted to add a new noun, ask which existing one it can become. That single habit will save more than any framework choice.</p>
+</div>
+
+<footer class="page-footer">
+  <p>End of the Architect Guide. Continue to the <a href="../user-guide.html">User Guide</a> for the user perspective and stakeholder tradeoffs, or the <a href="../interview-prep.html">Interview Prep</a> for senior-platform Q&amp;A. Back to the <a href="index.html">Architect overview</a> or the <a href="../index.html">site index</a>.</p>
+</footer>
+
+</main>
+</div>
+
+</body>
+</html>

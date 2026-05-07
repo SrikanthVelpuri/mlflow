@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tracing &amp; Auto-tracing &mdash; Architect Guide</title>
+<meta name="description" content="The MLflow trace data model, the private TracerProvider, and the safe_patch pattern that powers auto-tracing for 14+ LLM SDKs.">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+
+<div class="shell">
+
+<aside class="sidebar">
+  <h1>Architect&nbsp;Guide</h1>
+  <nav>
+    <a href="../index.html">&larr; Overview</a>
+    <div class="section-label">Chapters</div>
+    <a href="index.html">0. Architect overview</a>
+    <a href="storage.html">1. Storage layer</a>
+    <a href="packaging.html">2. Packaging &amp; registry</a>
+    <a href="serving.html">3. Projects &amp; serving</a>
+    <a href="tracing.html" class="active">4. Tracing &amp; auto-tracing</a>
+    <a href="agents.html">5. Agents, gateway, eval</a>
+    <a href="operations.html">6. Operations &amp; build-vs-buy</a>
+    <div class="section-label">Other</div>
+    <a href="../cheatsheet.html">Cheat sheet</a>
+    <a href="../user-guide.html">User Guide</a>
+    <a href="../interview-prep.html">Interview Prep</a>
+  </nav>
+</aside>
+
+<main>
+
+<p class="crumbs"><a href="../index.html">Overview</a> &rsaquo; <a href="index.html">Architect Guide</a> &rsaquo; Tracing &amp; auto-tracing</p>
+
+<h1>Chapter 4 &mdash; Tracing &amp; auto-tracing <span class="pill ai">AI</span></h1>
+<p class="subtitle">The new foundation for the GenAI surface. A trace data model that's a sibling of Run, a private TracerProvider that doesn't collide with the user's OTel stack, and the safe_patch pattern that auto-instruments 14+ LLM SDKs without changing user code.</p>
+
+<h2 id="data-model">The trace data model</h2>
+<p>Defined in <code>mlflow/entities/span.py</code> and <code>mlflow/entities/trace*.py</code>.</p>
+
+<table>
+  <thead><tr><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>SpanType</code></td><td>Enum: <code>LLM</code>, <code>CHAT_MODEL</code>, <code>CHAIN</code>, <code>AGENT</code>, <code>TOOL</code>, <code>RETRIEVER</code>, <code>EMBEDDING</code>, <code>RERANKER</code>, <code>PARSER</code>, <code>UNKNOWN</code></td></tr>
+    <tr><td><code>LiveSpan</code></td><td>A mutable span currently being recorded (start, set attribute, end, set status, set events).</td></tr>
+    <tr><td><code>Span</code></td><td>The immutable, persisted form of a <code>LiveSpan</code>.</td></tr>
+    <tr><td><code>Trace</code></td><td><code>(TraceInfo, TraceData)</code> &mdash; header metadata plus the full span list.</td></tr>
+    <tr><td><code>TraceInfo</code></td><td>Identifies the trace: <code>request_id</code>, <code>experiment_id</code>, <code>timestamp_ms</code>, <code>execution_time_ms</code>, <code>status</code>, tags.</td></tr>
+  </tbody>
+</table>
+
+<p>A <code>Trace</code> is logically a single root span and the tree underneath it; serialised, it is a flat span list plus header.</p>
+
+<h2 id="pipeline">The trace pipeline</h2>
+<p><code>mlflow/tracing/trace_manager.py</code> holds an in-memory buffer keyed by <code>request_id</code>. Spans are appended as they end; when the root span ends, the manager finalises the <code>Trace</code> and exports it.</p>
+
+<div class="diagram">
+  <svg viewBox="0 0 800 360" role="img" aria-label="Trace pipeline from instrumentation to exporters">
+    <defs>
+      <marker id="arrT" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6b7280"/>
+      </marker>
+    </defs>
+
+    <!-- Left: instrumented SDK calls -->
+    <rect class="box ai" x="20" y="40" width="190" height="50" rx="6"/>
+    <text class="title" x="115" y="63" text-anchor="middle">Instrumented SDK call</text>
+    <text class="small" x="115" y="80" text-anchor="middle">openai / anthropic / langchain</text>
+
+    <rect class="box ai" x="20" y="110" width="190" height="50" rx="6"/>
+    <text class="title" x="115" y="133" text-anchor="middle">Patched method runs</text>
+    <text class="small" x="115" y="150" text-anchor="middle">via safe_patch wrapper</text>
+
+    <rect class="box ai" x="20" y="180" width="190" height="50" rx="6"/>
+    <text class="title" x="115" y="203" text-anchor="middle">LiveSpan opened</text>
+    <text class="small" x="115" y="220" text-anchor="middle">type chosen by surface</text>
+
+    <rect class="box ai" x="20" y="250" width="190" height="60" rx="6"/>
+    <text class="title" x="115" y="274" text-anchor="middle">Span end</text>
+    <text class="small" x="115" y="291" text-anchor="middle">status, attributes,</text>
+    <text class="small" x="115" y="305" text-anchor="middle">output messages, finish_reason</text>
+
+    <!-- arrows down -->
+    <path class="arrow" d="M 115 90 L 115 110" marker-end="url(#arrT)"/>
+    <path class="arrow" d="M 115 160 L 115 180" marker-end="url(#arrT)"/>
+    <path class="arrow" d="M 115 230 L 115 250" marker-end="url(#arrT)"/>
+
+    <!-- Middle: TraceManager -->
+    <rect class="box hl" x="280" y="100" width="220" height="170" rx="6"/>
+    <text class="title" x="390" y="124" text-anchor="middle">TraceManager</text>
+    <text class="small" x="390" y="142" text-anchor="middle">in-memory buffer</text>
+    <text class="small" x="390" y="156" text-anchor="middle">keyed by request_id</text>
+    <text class="small" x="390" y="178" text-anchor="middle">spans appended as they end</text>
+    <text class="small" x="390" y="195" text-anchor="middle">tree assembled</text>
+    <text class="small" x="390" y="217" text-anchor="middle">when root ends &rarr;</text>
+    <text class="small" x="390" y="232" text-anchor="middle">finalise Trace</text>
+    <text class="small" x="390" y="252" text-anchor="middle">private TracerProvider</text>
+    <text class="small" x="390" y="265" text-anchor="middle">(no collision with user OTel)</text>
+
+    <path class="arrow" d="M 210 200 L 280 185" marker-end="url(#arrT)"/>
+
+    <!-- Right: exporters -->
+    <rect class="box" x="570" y="40" width="200" height="60" rx="6"/>
+    <text class="title" x="670" y="62" text-anchor="middle">MLflow exporter</text>
+    <text class="small" x="670" y="78" text-anchor="middle">writes to tracking store</text>
+    <text class="small" x="670" y="92" text-anchor="middle">queryable like runs</text>
+
+    <rect class="box" x="570" y="120" width="200" height="60" rx="6"/>
+    <text class="title" x="670" y="142" text-anchor="middle">Inference Table exporter</text>
+    <text class="small" x="670" y="158" text-anchor="middle">Databricks Model Serving</text>
+    <text class="small" x="670" y="172" text-anchor="middle">lands in a Delta table</text>
+
+    <rect class="box" x="570" y="200" width="200" height="60" rx="6"/>
+    <text class="title" x="670" y="222" text-anchor="middle">OpenTelemetry exporter</text>
+    <text class="small" x="670" y="238" text-anchor="middle">forwards to user OTel</text>
+    <text class="small" x="670" y="252" text-anchor="middle">collector (Honeycomb, DD&hellip;)</text>
+
+    <!-- arrows out -->
+    <path class="arrow" d="M 500 150 L 570 75" marker-end="url(#arrT)"/>
+    <path class="arrow" d="M 500 185 L 570 150" marker-end="url(#arrT)"/>
+    <path class="arrow" d="M 500 220 L 570 225" marker-end="url(#arrT)"/>
+  </svg>
+  <div class="caption">Left: where spans are produced. Middle: where they're buffered and assembled. Right: where they're shipped. The TraceManager owns the lifecycle; exporters are pluggable.</div>
+</div>
+
+<h2 id="private-tracer">Why a private TracerProvider?</h2>
+<p>MLflow does <strong>not</strong> use the global OpenTelemetry tracer provider. <code>mlflow/tracing/provider.py</code> creates and owns a private <code>TracerProvider</code> so MLflow's instrumentation does not collide with another OTel-using library running in the same process &mdash; PromptFlow, Snowpark, the user's own observability stack.</p>
+
+<div class="roundtable">
+  <div class="topic">Roundtable &mdash; Why a private TracerProvider?</div>
+  <div class="msg arch">
+    <div class="who"><span class="avatar">A</span> Architect</div>
+    <div class="body">If we used the global provider, two libraries calling <code>set_tracer_provider</code> would race. The user's own OTel exporter would either eat our spans or crash on our schema. A private provider is the only way to be a polite citizen.</div>
+  </div>
+  <div class="msg ai">
+    <div class="who"><span class="avatar">G</span> AI&nbsp;Engineer</div>
+    <div class="body">Practical upside: you can run MLflow tracing alongside Honeycomb, Datadog, or LangSmith. Each has its own span pipeline; ours doesn't pollute theirs.</div>
+  </div>
+  <div class="msg sre">
+    <div class="who"><span class="avatar">S</span> SRE</div>
+    <div class="body">Downside: no automatic correlation with the user's existing distributed traces. If you want trace_id correlation across services, you have to wire it explicitly via context propagation.</div>
+  </div>
+</div>
+
+<h2 id="autotrace">Auto-tracing &mdash; the safe_patch pattern</h2>
+<p>Every LLM SDK or orchestration framework gets a flavor module that follows the same pattern:</p>
+<ol>
+  <li><strong>Patch the SDK's entry point</strong> with <code>safe_patch</code> from <code>mlflow/utils/autologging_utils/safety.py</code>.</li>
+  <li><strong>Open a span</strong> (type chosen by what the patched method does).</li>
+  <li><strong>Convert provider-specific messages</strong> to MLflow's <code>ChatMessage</code>/<code>ChatTool</code> schema.</li>
+  <li><strong>Run the call</strong>, capture result, token usage, errors.</li>
+  <li><strong>Close the span</strong>: status, attributes, output messages, finish reason.</li>
+</ol>
+
+<div class="diagram">
+  <svg viewBox="0 0 800 360" role="img" aria-label="safe_patch wrapper structure">
+    <defs>
+      <marker id="arrSP" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6b7280"/>
+      </marker>
+      <marker id="arrSPe" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" fill="#b66c00"/>
+      </marker>
+    </defs>
+
+    <!-- Outer wrapper box -->
+    <rect class="box hl" x="40" y="20" width="720" height="320" rx="8"/>
+    <text class="title" x="400" y="46" text-anchor="middle">safe_patch wrapper around <tspan font-family="var(--font-mono)">OpenAI.chat.completions.create</tspan></text>
+
+    <!-- 1. pre-call -->
+    <rect class="box ai" x="80" y="80" width="200" height="60" rx="6"/>
+    <text class="title" x="180" y="103" text-anchor="middle">1. Pre-call</text>
+    <text class="small" x="180" y="120" text-anchor="middle">open span, capture inputs,</text>
+    <text class="small" x="180" y="134" text-anchor="middle">convert to chat schema</text>
+
+    <!-- 2. original -->
+    <rect class="box good" x="300" y="80" width="200" height="60" rx="6"/>
+    <text class="title" x="400" y="103" text-anchor="middle">2. Original method</text>
+    <text class="small" x="400" y="120" text-anchor="middle">user's call runs unmodified</text>
+    <text class="small" x="400" y="134" text-anchor="middle">exceptions propagate as normal</text>
+
+    <!-- 3. post-call -->
+    <rect class="box ai" x="520" y="80" width="200" height="60" rx="6"/>
+    <text class="title" x="620" y="103" text-anchor="middle">3. Post-call</text>
+    <text class="small" x="620" y="120" text-anchor="middle">capture result, token usage,</text>
+    <text class="small" x="620" y="134" text-anchor="middle">close span with finish_reason</text>
+
+    <!-- arrows -->
+    <path class="arrow" d="M 280 110 L 300 110" marker-end="url(#arrSP)"/>
+    <path class="arrow" d="M 500 110 L 520 110" marker-end="url(#arrSP)"/>
+
+    <!-- Error path: instrumentation failure -->
+    <rect class="box warn" x="80" y="190" width="640" height="60" rx="6"/>
+    <text class="title" x="400" y="213" text-anchor="middle">Error path &mdash; if our instrumentation raises</text>
+    <text class="small" x="400" y="231" text-anchor="middle">caught &amp; logged at WARN, never propagated to the user's call</text>
+    <text class="small" x="400" y="245" text-anchor="middle">user's exception (if any) re-raised <em>unchanged</em></text>
+
+    <!-- error arrows -->
+    <path class="arrow dashed" d="M 180 140 L 180 190" marker-end="url(#arrSPe)" style="stroke:var(--warn);"/>
+    <path class="arrow dashed" d="M 620 140 L 620 190" marker-end="url(#arrSPe)" style="stroke:var(--warn);"/>
+
+    <!-- invariants block -->
+    <rect class="box" x="80" y="280" width="640" height="40" rx="6" style="stroke-dasharray:4,3;"/>
+    <text class="small" x="400" y="305" text-anchor="middle"><b>Invariants:</b> user's call always runs &middot; user's exception always propagates unchanged &middot; instrumentation failures only WARN</text>
+  </svg>
+  <div class="caption">The contract that makes monkey-patching safe in production. Tracing failures are observable but never destructive to the user's code path.</div>
+</div>
+
+<div class="pros-cons">
+  <div class="col pros">
+    <h4>Why monkey-patching</h4>
+    <ul>
+      <li>Zero user code change &mdash; installation is the activation.</li>
+      <li>Works for SDKs we don't own and can't get a callback hook on.</li>
+      <li><code>safe_patch</code> guarantees we never break the SDK if our handler raises.</li>
+    </ul>
+  </div>
+  <div class="col cons">
+    <h4>What it costs</h4>
+    <ul>
+      <li>Brittle to SDK upgrades &mdash; each release of OpenAI/Anthropic can move the surface.</li>
+      <li>Subclass-shadowing edge cases (Swarm, custom Runnables).</li>
+      <li>Some SDKs offer real callback hooks (LangChain, LlamaIndex) &mdash; we use those instead.</li>
+    </ul>
+  </div>
+</div>
+
+<h3>Currently auto-instrumented (each lives under <code>mlflow/&lt;name&gt;/</code>)</h3>
+<table>
+  <thead><tr><th>Library</th><th>Patched surface</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td><strong>OpenAI</strong></td><td><code>chat.completions</code>, <code>completions</code>, <code>embeddings</code>, Swarm agents</td><td>Reference implementation</td></tr>
+    <tr><td><strong>Anthropic</strong></td><td><code>Messages.create</code></td><td>Recently extended (#14164) to emit chat messages and tools schema</td></tr>
+    <tr><td><strong>LangChain</strong></td><td>runnables / chains / agents / tools</td><td>Custom callback handler; tool spans added in #14159</td></tr>
+    <tr><td><strong>LlamaIndex</strong></td><td>query engines &amp; workflows</td><td><code>tracer.py</code> records each step</td></tr>
+    <tr><td><strong>DSPy</strong></td><td>predict / forward calls on modules</td><td></td></tr>
+    <tr><td><strong>Bedrock</strong></td><td><code>invoke_model</code>, <code>converse</code></td><td></td></tr>
+    <tr><td><strong>Gemini</strong> / <strong>Groq</strong> / <strong>Mistral</strong> / <strong>Ollama</strong> / <strong>LiteLLM</strong></td><td>chat / completions surfaces</td><td>Groq added in #14006; Mistral in #14195</td></tr>
+    <tr><td><strong>CrewAI</strong> / <strong>Autogen</strong> / <strong>PromptFlow</strong> / <strong>Semantic Kernel</strong></td><td>agent / DAG / kernel invocations</td><td></td></tr>
+  </tbody>
+</table>
+
+<h2 id="chat-schema">Unified chat schema</h2>
+<p>Every auto-tracing adapter converts to a single chat schema so that the UI, evaluation, and downstream consumers don't have to know which provider produced a span. The schema lives in <code>mlflow/types/chat.py</code> and <code>mlflow/types/llm.py</code>:</p>
+<ul>
+  <li><strong><code>ChatMessage</code></strong> &mdash; <code>role</code>, <code>content</code> (text or multi-modal parts), <code>tool_calls</code>, <code>tool_call_id</code>, <code>name</code>.</li>
+  <li><strong><code>ChatTool</code></strong> &mdash; function-calling schema (name, description, parameters JSONSchema).</li>
+  <li><strong><code>ChatParams</code></strong> &mdash; <code>temperature</code>, <code>max_tokens</code>, <code>top_p</code>, <code>top_k</code>, <code>frequency_penalty</code>, <code>presence_penalty</code>, <code>stop</code>, <code>tools</code>, <code>tool_choice</code>, <code>metadata</code>.</li>
+  <li><strong><code>ChatCompletionResponse</code> / <code>ChatCompletionChunk</code></strong> &mdash; list of <code>ChatChoice</code>s plus model and usage metadata.</li>
+</ul>
+<p>Intentionally OpenAI-shaped because that's the closest thing to a de facto standard. Every other provider gets a converter in its flavor module (e.g. <code>mlflow/anthropic/chat.py</code>).</p>
+
+<div class="roundtable">
+  <div class="topic">Roundtable &mdash; When monkey-patching is the right choice</div>
+  <div class="msg ai">
+    <div class="who"><span class="avatar">G</span> AI&nbsp;Engineer</div>
+    <div class="body">For SDK observability, the alternative is a wrapper SDK ("<code>from mlflow_openai import OpenAI</code>"). That breaks the user's existing code. Monkey-patching keeps <code>from openai import OpenAI</code> working &mdash; a much smaller migration tax.</div>
+  </div>
+  <div class="msg sec">
+    <div class="who"><span class="avatar">X</span> Security</div>
+    <div class="body">Monkey-patching means our code runs inside the user's process for every LLM call. Our error path must be airtight &mdash; that's what <code>safe_patch</code> is for. Any exception in tracing should be caught and logged at WARN, never propagated.</div>
+  </div>
+  <div class="msg mle">
+    <div class="who"><span class="avatar">M</span> ML&nbsp;Engineer</div>
+    <div class="body">For LangChain we use the real callback handler interface &mdash; <code>LangchainTracer</code>. Where SDKs offer first-class observability, take it. Monkey-patching is the fallback, not the goal.</div>
+  </div>
+</div>
+
+<footer class="page-footer">
+  <p>Continue to <a href="agents.html">Chapter 5: Agents, gateway, eval &rarr;</a> &middot; back to <a href="index.html">Architect overview</a></p>
+</footer>
+
+</main>
+</div>
+
+</body>
+</html>

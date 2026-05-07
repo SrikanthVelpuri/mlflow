@@ -1,27 +1,54 @@
-"""
-This is an example for leveraging MLflow's auto tracing capabilities for Anthropic.
-
-For more information about MLflow Tracing, see: https://mlflow.org/docs/latest/llms/tracing/index.html
-"""
-
 import os
-
 import anthropic
-
 import mlflow
+# from dotenv import load_dotenv
 
-# Turn on auto tracing for Anthropic by calling mlflow.anthropic.autolog()
-mlflow.anthropic.autolog()
+def setup_mlflow_tracking():
+    """Initialize MLflow auto-logging for Anthropic"""
+    try:
+        mlflow.anthropic.autolog()
+    except Exception as e:
+        print(f"Failed to initialize MLflow tracking: {e}")
+        raise
 
-# Configure your API key.
-client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+def get_client():
+    """Create and return an Anthropic client with API key from environment"""
+    # load_dotenv()  # Load environment variables from .env file
+    api_key = "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"
+    
+    if not api_key:
+        raise ValueError("ANTHROPIC_API_KEY environment variable not set")
+    
+    return anthropic.Anthropic(api_key=api_key)
 
-# Use the create method to create new message.
-message = client.messages.create(
-    model="claude-3-5-sonnet-20241022",
-    max_tokens=1024,
-    messages=[
-        {"role": "user", "content": "Hello, Claude"},
-    ],
-)
-print(message.content)
+def send_message(client, content):
+    """Send a message to Claude and handle potential errors"""
+    try:
+        message = client.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=1024,
+            messages=[
+                {"role": "user", "content": content},
+            ],
+        )
+        return message.content
+    except anthropic.APIError as e:
+        print(f"API error occurred: {e}")
+        raise
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        raise
+
+def main():
+    """Main function to run the example"""
+    setup_mlflow_tracking()
+    client = get_client()
+    
+    try:
+        response = send_message(client, "Hello, Claude")
+        print(response)
+    except Exception as e:
+        print(f"Failed to get response: {e}")
+
+if __name__ == "__main__":
+    main()

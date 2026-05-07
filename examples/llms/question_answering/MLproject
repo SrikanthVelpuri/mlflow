@@ -1,7 +1,9 @@
-name: llm_question_answering
+name: question_answering
 
-python_env: python_env.yaml
+conda_env: conda.yaml
 
 entry_points:
   main:
-    command: python question_answering.py
+    parameters:
+      system_prompt: {type: str, default: "Your job is to answer questions about MLflow."}
+    command: "python question_answering.py '{system_prompt}'"

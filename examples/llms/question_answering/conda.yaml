@@ -1,0 +1,19 @@
+name: qa-env
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+    - openai>=0.27.2
+    - tiktoken>=0.4.0
+    - tenacity>=8.2.2
+    - mlflow>=2.4.0
+    - pandas
+    - transformers
+    - torch
+    - evaluate
+    - textstat
+    - sentence-transformers
+    - numpy

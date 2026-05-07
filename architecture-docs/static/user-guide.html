@@ -1,0 +1,493 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>User Guide &amp; Best Practices — MLflow Deep Dive</title>
+<meta name="description" content="Practical user guide for MLflow's ML and AI platform: workflows, best practices, anti-patterns, and how to balance tradeoffs across data science, ML engineering, PMs, security, and SRE.">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="shell">
+
+<aside class="sidebar">
+  <h1>User&nbsp;Guide</h1>
+  <nav>
+    <a href="index.html">&larr; Overview</a>
+    <div class="section-label">Sections</div>
+    <a href="#audience">1. Who this is for</a>
+    <a href="#five-min">2. Five-minute path</a>
+    <a href="#tracking-bp">3. Tracking</a>
+    <a href="#packaging-bp">4. Packaging</a>
+    <a href="#registry-bp">5. Registry workflows</a>
+    <a href="#projects-bp">6. Projects &amp; reproducibility</a>
+    <a href="#tracing-bp">7. AI tracing</a>
+    <a href="#eval-bp">8. AI evaluation</a>
+    <a href="#agents-bp">9. Agents in production</a>
+    <a href="#anti-patterns">10. Anti-patterns</a>
+    <a href="#stakeholders">11. Stakeholder map</a>
+    <a href="#tradeoffs">12. Tradeoff roundtables</a>
+    <a href="#scenarios">13. Scenarios</a>
+    <a href="#checklist">14. Production checklist</a>
+    <a href="#escalation">15. When to escalate</a>
+    <div class="section-label">Sibling guides</div>
+    <a href="architect/index.html">Architect Guide</a>
+    <a href="interview-prep.html">Interview Prep</a>
+    <a href="cheatsheet.html">Cheat sheet</a>
+  </nav>
+</aside>
+
+<main>
+
+<h1>User Guide &amp; Best Practices</h1>
+<p class="subtitle">How to actually use the ML and AI platform — and how to align your work with the people who don't read the same dashboards you do. The first half is best practices; the second half is the politics.</p>
+
+<div class="toc">
+  <h3>On this page</h3>
+  <ol>
+    <li><a href="#audience">Who this is for</a></li>
+    <li><a href="#five-min">The five-minute path</a></li>
+    <li><a href="#tracking-bp">Tracking — best practices</a></li>
+    <li><a href="#packaging-bp">Packaging — best practices</a></li>
+    <li><a href="#registry-bp">Registry workflows</a></li>
+    <li><a href="#projects-bp">Projects &amp; reproducibility</a></li>
+    <li><a href="#tracing-bp">AI tracing — best practices</a></li>
+    <li><a href="#eval-bp">AI evaluation — best practices</a></li>
+    <li><a href="#agents-bp">Agents in production</a></li>
+    <li><a href="#anti-patterns">Anti-patterns to avoid</a></li>
+    <li><a href="#stakeholders">Stakeholder map</a></li>
+    <li><a href="#tradeoffs">Tradeoff roundtables</a></li>
+    <li><a href="#scenarios">Scenarios</a></li>
+    <li><a href="#checklist">Production checklist</a></li>
+    <li><a href="#escalation">When to escalate</a></li>
+  </ol>
+</div>
+
+<!-- ========== AUDIENCE ========== -->
+<h2 id="audience">1. Who this guide is for</h2>
+<table>
+  <thead><tr><th>You are a&hellip;</th><th>Read first</th><th>Skim later</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Data scientist</strong> (notebooks, training)</td><td>Tracking, Packaging, Registry workflows</td><td>Tracing &amp; eval if you touch LLMs</td></tr>
+    <tr><td><strong>ML engineer</strong> (productionising)</td><td>Registry, Projects, Production checklist, Stakeholder map</td><td>Anti-patterns, Scenarios</td></tr>
+    <tr><td><strong>AI / GenAI engineer</strong> (agents, RAG)</td><td>Tracing, Evaluation, Agents in production</td><td>Registry workflows</td></tr>
+    <tr><td><strong>Tech lead / staff engineer</strong></td><td>Stakeholder map, Tradeoff roundtables, Scenarios</td><td>Everything</td></tr>
+    <tr><td><strong>PM / product owner</strong></td><td>Stakeholder map, Scenarios</td><td>Tracing for what's auditable</td></tr>
+  </tbody>
+</table>
+
+<!-- ========== FIVE MINUTE ========== -->
+<h2 id="five-min">2. The five-minute path</h2>
+<p>The minimum viable workflow that you should be able to run before you read anything else.</p>
+<pre><code># 1. point at a server (or skip and use ./mlruns locally)
+export MLFLOW_TRACKING_URI=https://mlflow.your-company.internal
+
+# 2. set the experiment — pick a stable name; runs cluster under it
+mlflow.set_experiment("churn/v2")
+
+# 3. wrap your training in a run; log signature + input example
+with mlflow.start_run(run_name="rf_baseline"):
+    mlflow.log_params({"n_estimators": 200, "max_depth": 8})
+    model = train(...)
+    mlflow.log_metric("auc", 0.87)
+    mlflow.sklearn.log_model(
+        sk_model=model,
+        artifact_path="model",
+        signature=infer_signature(X_train, model.predict(X_train)),
+        input_example=X_train.head(3),
+    )
+
+# 4. promote — only register what you'd defend in a review
+mlflow.register_model("runs:/{run_id}/model", "churn-classifier")
+client.set_registered_model_alias("churn-classifier", "champion", version=4)
+
+# 5. consume — never hardcode versions in prod code; use the alias
+model = mlflow.pyfunc.load_model("models:/churn-classifier@champion")</code></pre>
+
+<div class="callout">
+  <div class="label">If you only do five things</div>
+  <p>(1) <strong>Set an experiment name.</strong> "Default" is the path to chaos. (2) <strong>Always pass a signature.</strong> (3) <strong>Use aliases, not version numbers</strong> in consuming code. (4) <strong>Tag your runs</strong> with the data version, the git SHA, and the owner. (5) <strong>Don't log datasets as artifacts</strong> — log a <code>Dataset</code> reference.</p>
+</div>
+
+<!-- ========== TRACKING BP ========== -->
+<h2 id="tracking-bp">3. Tracking &mdash; best practices</h2>
+<h3>Run hygiene</h3>
+<ul>
+  <li><strong>One concept per experiment.</strong> "<code>churn/v2/feature-engineering</code>" is fine; "<code>experiments-jan</code>" is not.</li>
+  <li><strong>Run names are for humans.</strong> Encode the change, not the timestamp: <code>"add-aci-feature"</code>, not <code>"run_2026_05_06_v2"</code>.</li>
+  <li><strong>Tags carry context</strong> the run can't reconstruct: <code>git_sha</code>, <code>dataset_version</code>, <code>trigger</code> (manual / nightly / pr-check), <code>owner</code>.</li>
+  <li><strong>Log params before training.</strong> A failed run with no params is a forensic dead-end.</li>
+</ul>
+
+<h3>Metrics</h3>
+<ul>
+  <li><strong>Step matters.</strong> Pass <code>step=epoch</code> so the UI draws curves.</li>
+  <li><strong>Use <code>log_metrics({...}, step=...)</code></strong> to batch a dict in one call. The async queue is good but fewer calls is better still.</li>
+  <li><strong>Don't log a metric per row of validation</strong> — that's what the eval harness is for. Aggregate first.</li>
+</ul>
+
+<h3>Datasets, not files</h3>
+<p>Use <code>mlflow.data</code> wrappers (<code>from_pandas</code>, <code>from_huggingface</code>, <code>from_spark</code>, etc.) and <code>mlflow.log_input(dataset, context="training")</code>. The digest is content-hashed, so identical data across runs collapses — your storage bill thanks you and lineage queries actually work.</p>
+
+<div class="callout warn">
+  <div class="label">Common mistake</div>
+  <p>People <code>log_artifact("train.csv")</code> on every run, copying the same 2GB CSV into S3 N times. Use a Dataset reference; if the file truly is the source of truth, log it once and reference it by URI.</p>
+</div>
+
+<!-- ========== PACKAGING BP ========== -->
+<h2 id="packaging-bp">4. Packaging &mdash; best practices</h2>
+<ul>
+  <li><strong>Always pass <code>signature=</code> and <code>input_example=</code>.</strong> Signature lets the scoring server reject bad payloads with a 422; input_example lets the UI show a "predict" button.</li>
+  <li><strong>Pin your environment.</strong> If you don't pass <code>conda_env=</code> or <code>pip_requirements=</code>, MLflow infers — and the inference can be wrong on niche packages. Pin explicitly for production.</li>
+  <li><strong>Don't log the model from the notebook the data scientist trained in</strong> if you can re-train in a CI job that captures git SHA + locked deps.</li>
+  <li><strong>Use <code>code_paths=</code></strong> for custom Python modules the model imports, otherwise loading in another container will <code>ImportError</code>.</li>
+  <li><strong>One model artifact, one purpose.</strong> Don't pack a feature transformer and a model in the same artifact unless they always deploy together — if you need to update one without the other, split.</li>
+</ul>
+
+<h3>Choosing a flavor</h3>
+<table>
+  <thead><tr><th>You have&hellip;</th><th>Use flavor</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td>sklearn / xgboost / lightgbm / catboost</td><td>Native flavor</td><td>Inferred signature works well</td></tr>
+    <tr><td>PyTorch model</td><td><code>mlflow.pytorch</code> or <code>mlflow.transformers</code></td><td>Transformers preferred for HF models</td></tr>
+    <tr><td>Custom inference logic</td><td><code>mlflow.pyfunc.PythonModel</code></td><td>Override <code>predict</code>; pack code via <code>code_paths</code></td></tr>
+    <tr><td>Custom GenAI agent</td><td><code>ChatModel</code></td><td>Typed messages in/out; gets the chat schema for free</td></tr>
+    <tr><td>ONNX-exportable model</td><td><code>mlflow.onnx</code></td><td>Pickle-free, faster cold start</td></tr>
+  </tbody>
+</table>
+
+<!-- ========== REGISTRY BP ========== -->
+<h2 id="registry-bp">5. Registry workflows</h2>
+
+<h3>Champion / Challenger with aliases</h3>
+<pre><code># promote
+client.set_registered_model_alias("churn", "challenger", version=12)
+# run shadow / A-B
+# if metrics hold:
+client.set_registered_model_alias("churn", "champion", version=12)
+# the previous champion alias automatically retargets — no copy</code></pre>
+
+<p>Code consumers always do <code>models:/churn@champion</code>. They never know what version is current. The promotion is a metadata flip, not a redeploy.</p>
+
+<h3>Region- and tier-specific aliases</h3>
+<p>Aliases are arbitrary strings. <code>eu-prod</code>, <code>us-prod</code>, <code>internal-only</code>, <code>shadow</code>, <code>canary</code> are all valid. The deployment pipeline reads its own alias, so a regional rollback only changes one alias.</p>
+
+<div class="callout good">
+  <div class="label">Why this is good</div>
+  <p>Promotion is observable (alias changes are auditable), reversible (re-point), and decoupled from deployment (the running pod doesn't change). When something goes wrong at 2am, "flip the alias back" is the fastest rollback.</p>
+</div>
+
+<h3>What to put in version description &amp; tags</h3>
+<ul>
+  <li>Description: the <em>why</em> — "rolled in zip-code one-hot, fixed leak from <code>last_login</code>".</li>
+  <li>Tags: <code>data_version</code>, <code>git_sha</code>, <code>training_run_id</code>, <code>approved_by</code>, <code>compliance_review_id</code>.</li>
+</ul>
+
+<!-- ========== PROJECTS BP ========== -->
+<h2 id="projects-bp">6. Projects &amp; reproducibility</h2>
+<p>Use <code>MLproject</code> for the inner loop — "I want CI to be able to re-run my training". Use Airflow / Prefect / Argo / Dagster for the outer loop — "every Sunday, refresh + retrain + redeploy". They aren't competitors, they're nested.</p>
+
+<pre><code># MLproject
+name: churn-training
+python_env: python_env.yaml
+entry_points:
+  main:
+    parameters:
+      data_uri: {type: str}
+      n_estimators: {type: int, default: 200}
+      max_depth: {type: int, default: 8}
+    command: "python train.py --data {data_uri} --n-est {n_estimators} --depth {max_depth}"</code></pre>
+
+<div class="callout">
+  <div class="label">Reproducibility is a chain</div>
+  <p>Reproducibility = pinned env + pinned code + pinned data + pinned hyperparameters. Miss any link and reproducibility is theatre. <code>MLproject</code> covers env + code + params; <code>Dataset</code> with a digest covers data; everything else is up to you.</p>
+</div>
+
+<!-- ========== TRACING BP ========== -->
+<h2 id="tracing-bp">7. AI tracing &mdash; best practices <span class="pill ai">AI</span></h2>
+<ul>
+  <li><strong>Enable autologging for the SDKs you use:</strong> <code>mlflow.openai.autolog()</code>, <code>mlflow.anthropic.autolog()</code>, <code>mlflow.langchain.autolog()</code>. One line, free observability.</li>
+  <li><strong>Use the <code>@mlflow.trace</code> decorator</strong> on your own functions to make custom span trees. Pass <code>span_type="TOOL"</code> / <code>"RETRIEVER"</code> / <code>"AGENT"</code> for typed spans the UI knows how to render.</li>
+  <li><strong>Tag traces with request context</strong>: <code>user_id</code>, <code>session_id</code>, <code>route</code>, <code>experiment_variant</code>. Use <code>mlflow.update_current_trace(tags=...)</code>.</li>
+  <li><strong>Don't include PII in span attributes</strong> unless your store is approved for it. Mask early — at the trace boundary.</li>
+  <li><strong>Sample in production.</strong> 100% trace capture for a high-QPS LLM service is a lot of bytes. Set up a sampler that always captures errors, samples a percentage of successes.</li>
+</ul>
+
+<div class="roundtable">
+  <div class="topic">Roundtable — How much should we trace?</div>
+  <div class="msg ai">
+    <div class="who"><span class="avatar">G</span> AI&nbsp;Engineer</div>
+    <div class="body">Capture 100% in dev and staging. In prod, target 100% of errors, 100% of low-confidence, sample 5-10% of nominal traffic. The trace is most valuable on the calls that misbehaved.</div>
+  </div>
+  <div class="msg pm">
+    <div class="who"><span class="avatar">P</span> PM</div>
+    <div class="body">For specific user-facing features I want 100% capture so we can debug individual user complaints. The cost is the price of a usable feedback loop.</div>
+  </div>
+  <div class="msg sec">
+    <div class="who"><span class="avatar">X</span> Security</div>
+    <div class="body">If span content includes user input, treat the trace store like the chat history — same retention, same encryption, same right-to-delete plumbing.</div>
+  </div>
+  <div class="msg dba">
+    <div class="who"><span class="avatar">D</span> Storage</div>
+    <div class="body">Span tables grow faster than you think — ours doubled the metric table within two months of enabling traces. Plan TTL or cold-tier off-load from day one.</div>
+  </div>
+</div>
+
+<!-- ========== EVAL BP ========== -->
+<h2 id="eval-bp">8. AI evaluation &mdash; best practices <span class="pill ai">AI</span></h2>
+<ul>
+  <li><strong>Build the eval set before the agent.</strong> If you can't write 30 examples of "right answer", you don't know what the agent should do.</li>
+  <li><strong>Mix judge types.</strong> Heuristic checks (regex, JSON validity, contains-keyword) are cheap and deterministic. LLM-as-judge for nuance. Human-rated golden set for calibration.</li>
+  <li><strong>Calibrate the judge.</strong> Sample N rows, have humans rate, measure judge-vs-human agreement. If &lt; 80% agreement, your judge prompt needs work — not your agent.</li>
+  <li><strong>Run eval on every PR</strong> that touches the agent. Treat regressions like test failures.</li>
+  <li><strong>Make assessments addressable.</strong> Tag the row with the test case ID so you can trace eval-failure-row &rarr; agent-trace &rarr; judge-trace in one click.</li>
+</ul>
+
+<div class="callout gold">
+  <div class="label">The closed loop</div>
+  <p>Production trace &rarr; sample interesting failures &rarr; add to eval set &rarr; eval catches the regression next time. Without the loop, your eval set staleness becomes your model's blind spot.</p>
+</div>
+
+<!-- ========== AGENTS BP ========== -->
+<h2 id="agents-bp">9. Agents in production <span class="pill ai">AI</span></h2>
+<ul>
+  <li><strong>Wrap as a <code>ChatModel</code></strong> early, even if you're prototyping. The discipline of declaring inputs/outputs as <code>ChatMessage</code>/<code>ChatParams</code> pays off the first time anything talks to it.</li>
+  <li><strong>Cap iterations.</strong> Every agent loop needs a hard limit. "I'll trust the LLM to terminate" is how you discover a $400 trace.</li>
+  <li><strong>Cap latency.</strong> Long-tail user requests are worse than failed ones. Time-bound the whole agent and gracefully partial-respond.</li>
+  <li><strong>Idempotent tools.</strong> If the agent retries, the tool must not double-charge / double-send / double-write.</li>
+  <li><strong>Route through the AI Gateway.</strong> Even single-provider apps benefit from centralised keys, rate limits, and per-team cost attribution.</li>
+  <li><strong>Trace + evaluate.</strong> Every prod path should be traceable; every traced agent should have an eval set.</li>
+</ul>
+
+<!-- ========== ANTIPATTERNS ========== -->
+<h2 id="anti-patterns">10. Anti-patterns to avoid</h2>
+<table>
+  <thead><tr><th>Anti-pattern</th><th>Why it bites</th><th>Do this instead</th></tr></thead>
+  <tbody>
+    <tr><td>Logging into the "Default" experiment</td><td>Six months in, no one can find anything</td><td>Per-project experiment with a stable name</td></tr>
+    <tr><td>Hardcoding model versions in prod</td><td>Every deploy is a code change</td><td>Use aliases (<code>models:/X@champion</code>)</td></tr>
+    <tr><td>Skipping signatures</td><td>500s instead of 422s; brittle clients</td><td>Always pass <code>signature=</code></td></tr>
+    <tr><td>Logging full datasets as artifacts</td><td>Storage bill explodes; lineage breaks</td><td>Use <code>Dataset</code> with digest</td></tr>
+    <tr><td>Tracking server exposed without auth</td><td>One curl wipes your runs</td><td>Ingress with OIDC; never internet-facing without it</td></tr>
+    <tr><td>One MLflow per data scientist</td><td>Unmergeable history; no shared lineage</td><td>One per team; experiments for isolation</td></tr>
+    <tr><td>"It worked locally" agent ships to prod</td><td>No traces, no eval, no rollback</td><td>Wrap as ChatModel + register + alias + eval gate</td></tr>
+    <tr><td>Letting the agent loop unbounded</td><td>Surprise $$$, surprise latency</td><td>Hard iteration cap, hard time budget</td></tr>
+    <tr><td>Trusting LLM-as-judge without calibration</td><td>Your eval drifts silently</td><td>Quarterly judge-vs-human agreement check</td></tr>
+    <tr><td>Putting PII in span attributes</td><td>Compliance &amp; right-to-delete pain</td><td>Mask at the trace boundary</td></tr>
+  </tbody>
+</table>
+
+<!-- ========== STAKEHOLDERS ========== -->
+<h2 id="stakeholders">11. Stakeholder map</h2>
+<p>The platform serves more than its primary user. Each role has different success criteria; conflict is normal, not pathological. Naming the conflict is most of the work of resolving it.</p>
+
+<div class="stakeholders">
+  <div class="stakeholder">
+    <h4>Data Scientist</h4>
+    <p class="wants"><strong>Wants:</strong> velocity, notebook freedom, easy comparison, no friction to log.</p>
+    <p class="conflict">vs. ML Engineer's "your code must be packaged".</p>
+  </div>
+  <div class="stakeholder">
+    <h4>ML Engineer</h4>
+    <p class="wants"><strong>Wants:</strong> reproducibility, signed artifacts, CI gates, predictable promotion.</p>
+    <p class="conflict">vs. Data Scientist's "I just want to ship this".</p>
+  </div>
+  <div class="stakeholder">
+    <h4>AI Engineer</h4>
+    <p class="wants"><strong>Wants:</strong> fast prompt iteration, end-to-end traces, eval-as-CI.</p>
+    <p class="conflict">vs. SRE's "what's the p99?".</p>
+  </div>
+  <div class="stakeholder">
+    <h4>Product Manager</h4>
+    <p class="wants"><strong>Wants:</strong> features shipped, business KPIs visible, predictable timelines.</p>
+    <p class="conflict">vs. ML Engineer's "the eval set isn't ready".</p>
+  </div>
+  <div class="stakeholder">
+    <h4>SRE / Platform</h4>
+    <p class="wants"><strong>Wants:</strong> SLOs met, blast radius limited, no surprise spend.</p>
+    <p class="conflict">vs. AI Engineer's "I need to A/B four prompts in prod".</p>
+  </div>
+  <div class="stakeholder">
+    <h4>Security &amp; Compliance</h4>
+    <p class="wants"><strong>Wants:</strong> auditable provenance, no PII leakage, key rotation, RBAC.</p>
+    <p class="conflict">vs. Data Scientist's "can I just put my key in <code>.env</code>?".</p>
+  </div>
+  <div class="stakeholder">
+    <h4>Finance / Cost</h4>
+    <p class="wants"><strong>Wants:</strong> per-team attribution, budgets enforced, predictable spend.</p>
+    <p class="conflict">vs. PM's "the demo needs GPT-4".</p>
+  </div>
+  <div class="stakeholder">
+    <h4>Legal / Risk</h4>
+    <p class="wants"><strong>Wants:</strong> approved providers only, model risk documented, decisions explainable.</p>
+    <p class="conflict">vs. AI Engineer's "the new model is 30% better on our eval".</p>
+  </div>
+</div>
+
+<!-- ========== TRADEOFFS ========== -->
+<h2 id="tradeoffs">12. Tradeoff roundtables</h2>
+
+<h3>How much process for promotion?</h3>
+<div class="roundtable">
+  <div class="topic">DS velocity vs production discipline</div>
+  <div class="msg ds">
+    <div class="who"><span class="avatar">N</span> Data&nbsp;Scientist</div>
+    <div class="body">Every promotion needs three approvals, a signed-off eval, and a 24-hour shadow. By the time I'm in prod, the data has shifted again.</div>
+  </div>
+  <div class="msg mle">
+    <div class="who"><span class="avatar">M</span> ML&nbsp;Engineer</div>
+    <div class="body">Last month a model went out without a signature and broke 4% of requests for two hours. Process is the residue of that incident.</div>
+  </div>
+  <div class="msg pm">
+    <div class="who"><span class="avatar">P</span> PM</div>
+    <div class="body">What if process scales with blast radius? Internal-only models: lighter approval. User-facing: full ladder. Same alias mechanism, different gates.</div>
+  </div>
+  <div class="msg sre">
+    <div class="who"><span class="avatar">S</span> SRE</div>
+    <div class="body">Tier the approvals by alias. Promoting to <code>shadow</code>: anyone. <code>challenger</code>: team lead. <code>champion</code>: + on-call sign-off. The platform enforces it via alias-write RBAC.</div>
+  </div>
+  <div class="msg arch">
+    <div class="who"><span class="avatar">A</span> Architect</div>
+    <div class="body">That's the resolution. The bureaucracy is proportional to risk; the platform encodes the policy; nobody negotiates per-deploy.</div>
+  </div>
+</div>
+
+<h3>Self-service vs guard-rails for LLM provider choice</h3>
+<div class="roundtable">
+  <div class="topic">Should every team pick its own LLM provider?</div>
+  <div class="msg ai">
+    <div class="who"><span class="avatar">G</span> AI&nbsp;Engineer</div>
+    <div class="body">Different products want different providers — Claude for long-context, GPT-4 for tools, a small open model for cheap classification. Locking us to one provider hurts the product.</div>
+  </div>
+  <div class="msg sec">
+    <div class="who"><span class="avatar">X</span> Security</div>
+    <div class="body">Each provider is a separate vendor risk review, DPA, key rotation surface, audit log to wire up. We can't have N teams onboarding N providers ad-hoc.</div>
+  </div>
+  <div class="msg arch">
+    <div class="who"><span class="avatar">A</span> Architect</div>
+    <div class="body">The gateway is the answer. Approved providers behind one URL; teams pick from the menu, not from the open internet. New providers go through one approval flow, then everyone benefits.</div>
+  </div>
+  <div class="msg pm">
+    <div class="who"><span class="avatar">P</span> PM</div>
+    <div class="body">The menu has to actually update. If "approved providers" lags six months behind the frontier, teams will route around the platform. A monthly review, not a yearly one.</div>
+  </div>
+</div>
+
+<h3>Cost vs quality on the inference path</h3>
+<div class="roundtable">
+  <div class="topic">Who picks the model — the engineer, the PM, or the bill?</div>
+  <div class="msg pm">
+    <div class="who"><span class="avatar">P</span> PM</div>
+    <div class="body">User-facing quality is the metric that matters. If the bigger model wins eval by 8 points, we ship it.</div>
+  </div>
+  <div class="msg ai">
+    <div class="who"><span class="avatar">G</span> AI&nbsp;Engineer</div>
+    <div class="body">8 points on which slice? On 60% of traffic the small model is indistinguishable. Route by complexity: small model first, escalate on low confidence. We've cut cost 4&times; that way.</div>
+  </div>
+  <div class="msg arch">
+    <div class="who"><span class="avatar">A</span> Architect</div>
+    <div class="body">Routing logic belongs in the agent, not in the gateway. The gateway is a meter; the agent makes the call. Trace both legs so we can see when the small model wins.</div>
+  </div>
+  <div class="msg sre">
+    <div class="who"><span class="avatar">S</span> SRE</div>
+    <div class="body">And budget alarms per route — when the spike lands at midnight, I want to page the PM, not me.</div>
+  </div>
+</div>
+
+<h3>Auth, RBAC, and the data-science notebook</h3>
+<div class="roundtable">
+  <div class="topic">How locked-down should tracking be?</div>
+  <div class="msg ds">
+    <div class="who"><span class="avatar">N</span> Data&nbsp;Scientist</div>
+    <div class="body">If logging a metric requires a service principal token rotated every 7 days, I will stop logging metrics.</div>
+  </div>
+  <div class="msg sec">
+    <div class="who"><span class="avatar">X</span> Security</div>
+    <div class="body">If an unauthenticated user can write to the tracking server, anyone on the corp network can poison runs.</div>
+  </div>
+  <div class="msg arch">
+    <div class="who"><span class="avatar">A</span> Architect</div>
+    <div class="body">SSO at the proxy, refresh tokens cached locally, MLflow client picks up <code>MLFLOW_TRACKING_TOKEN</code>. No daily logins, no hand-rolled credentials in notebooks.</div>
+  </div>
+  <div class="msg sre">
+    <div class="who"><span class="avatar">S</span> SRE</div>
+    <div class="body">And per-experiment write ACLs as the second line. Even if a token leaks, blast radius is one team's experiment.</div>
+  </div>
+</div>
+
+<!-- ========== SCENARIOS ========== -->
+<h2 id="scenarios">13. Scenarios</h2>
+
+<div class="scenario">
+  <span class="label">Scenario</span>
+  <div class="title">"We need to ship a new RAG agent in two weeks."</div>
+  <p><strong>Platform side:</strong> spin a <code>ChatModel</code>, register it under a clear name, point a <code>shadow</code> alias at it, route it through the gateway. Wire <code>mlflow.openai.autolog()</code> + your retriever's <code>@mlflow.trace</code>. <strong>User side:</strong> seed a 50-row eval set from existing user questions; pick three judges (retrieval-relevance, answer-faithfulness, JSON-shape). Gate every PR on the eval. <strong>Stakeholder balance:</strong> PM gets a Friday demo URL (the shadow alias resolves through the gateway); SRE gets the iteration cap and time budget; security gets the audit trail (every call traced through the gateway). When eval clears, flip the alias to <code>challenger</code>, then <code>champion</code>.</p>
+</div>
+
+<div class="scenario">
+  <span class="label">Scenario</span>
+  <div class="title">"Our tracking DB hit 100M rows and queries are slow."</div>
+  <p><strong>First check:</strong> the <code>metrics</code> table indexes — <code>(run_uuid, key, step)</code> should be present. <strong>Next:</strong> archive runs older than retention to a cold experiment (or a separate read-only DB). <strong>Stakeholder balance:</strong> DS may push back on archive ("I might need that 2023 sweep"); compromise is to keep run metadata, archive metric history, and ship a one-line API to rehydrate on demand.</p>
+</div>
+
+<div class="scenario">
+  <span class="label">Scenario</span>
+  <div class="title">"PM wants A/B in prod; SRE doesn't want surprise traffic to a new model."</div>
+  <p>Use two aliases (<code>champion</code>, <code>challenger</code>) and a deterministic split at the gateway. Track <code>variant</code> as a trace tag. The gateway enforces the split; SRE's traffic graph stays clean; PM gets the A/B. If the challenger underperforms on a key business metric, flip the alias back. No code change.</p>
+</div>
+
+<div class="scenario">
+  <span class="label">Scenario</span>
+  <div class="title">"Legal flagged GPT-4 for a regulated workflow; we need to switch providers."</div>
+  <p>The workflow already routes through the gateway, so the change is a route swap to an approved provider (Bedrock with a regional model, perhaps). Re-run the eval set; if it passes, flip. The agent code does not change. <strong>This is exactly the property the gateway is bought for.</strong></p>
+</div>
+
+<div class="scenario">
+  <span class="label">Scenario</span>
+  <div class="title">"Data scientist wants to log 10,000 metrics per training step."</div>
+  <p>Don't. The <em>per-step</em> metric is a curve; 10,000 of them is 10,000 curves, which is an artifact, not a metric. Aggregate (mean, p50, p95) into a handful of curves; log the full per-feature distribution as a single artifact (e.g. a Parquet file or a histogram image) that the comparison view can render. The async queue will keep up technically; your future self looking at the UI will not.</p>
+</div>
+
+<!-- ========== CHECKLIST ========== -->
+<h2 id="checklist">14. Production checklist</h2>
+<table>
+  <thead><tr><th>Area</th><th>Check</th></tr></thead>
+  <tbody>
+    <tr><td>Tracking</td><td>Server fronted by SSO; per-experiment ACLs; backups + PITR on; index on <code>(run_uuid, key, step)</code> verified.</td></tr>
+    <tr><td>Artifact store</td><td>Server-side encryption on; bucket policy blocks public ACLs; co-located with serving region.</td></tr>
+    <tr><td>Logging</td><td>Async queue on for training; async <em>off</em> for one-shot scripts where loss-on-crash matters.</td></tr>
+    <tr><td>Models</td><td>Signature on every logged model; <code>input_example</code> attached; environment pinned (<code>pip_requirements=</code> or <code>conda_env=</code>).</td></tr>
+    <tr><td>Registry</td><td>Aliases for promotion; alias write RBAC tiered by environment; description carries the <em>why</em>.</td></tr>
+    <tr><td>Serving</td><td>Pyfunc scoring server behind a managed LB + HPA; container pins the model URI at build time.</td></tr>
+    <tr><td>AI Gateway</td><td>Provider keys not in code; per-route rate limits; per-team cost attribution; audit log shipped to your SIEM.</td></tr>
+    <tr><td>Tracing</td><td>Autolog on for SDKs in use; sampling on (errors always); PII masked at boundary; TTL/cold-tier policy in place.</td></tr>
+    <tr><td>Evaluation</td><td>Eval set in version control; LLM judge calibration check on a recurring cron; PR gate on regression.</td></tr>
+    <tr><td>Operations</td><td>Dashboards: tracking p95, gateway p95, cost per run, cost per trace, alias-flip log.</td></tr>
+  </tbody>
+</table>
+
+<!-- ========== ESCALATION ========== -->
+<h2 id="escalation">15. When to escalate</h2>
+<ul>
+  <li><strong>Anything affecting prod inference</strong> &mdash; broken signature, registry alias pointing at a deleted version, gateway 5xx storm. Page the on-call before you investigate.</li>
+  <li><strong>Cost anomalies</strong> &mdash; gateway cost or trace storage growing &gt; 2&times; week-over-week without a known cause.</li>
+  <li><strong>Security signal</strong> &mdash; suspected key leak in a notebook, PII in a span attribute, unauthorised alias write.</li>
+  <li><strong>Compliance change</strong> &mdash; new regulation, new approved-provider list, new data residency requirement. Loop in legal &amp; the platform team before code changes.</li>
+  <li><strong>Cross-team conflict that's blocking a launch</strong> &mdash; bring it to the architect roundtable rather than DM-fighting it. Most of these are not technical disputes.</li>
+</ul>
+
+<div class="callout good">
+  <div class="label">The meta-rule</div>
+  <p>The platform exists so the same five primitives (six, with traces) work for everyone. When you find yourself fighting the platform — building parallel systems, hiding state in tags, hardcoding around aliases — that's a signal to escalate, not work around. The architects want to know.</p>
+</div>
+
+<footer class="page-footer">
+  <p>Continue to the <a href="interview-prep.html">Interview Prep</a> for senior-platform Q&amp;A, or the <a href="architect/index.html">Architect Guide</a> for the layer-by-layer deep dive. Back to the <a href="index.html">overview</a> &middot; <a href="cheatsheet.html">cheat sheet</a>.</p>
+</footer>
+
+</main>
+</div>
+
+</body>
+</html>

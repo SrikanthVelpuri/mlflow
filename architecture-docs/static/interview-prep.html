@@ -1,0 +1,611 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Interview Preparation — MLflow Deep Dive</title>
+<meta name="description" content="Deep-dive interview preparation for ML/AI platform engineering roles, anchored in MLflow's design: concept catalogue, system design prompts, behavioural framing, and 40+ Q&A.">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="shell">
+
+<aside class="sidebar">
+  <h1>Interview&nbsp;Prep</h1>
+  <nav>
+    <a href="index.html">&larr; Overview</a>
+    <div class="section-label">Sections</div>
+    <a href="#how-to">1. How to use this</a>
+    <a href="#concepts">2. Concept catalogue</a>
+    <a href="#warmup">3. Warm-up questions</a>
+    <a href="#ml-deep">4. ML platform deep dive</a>
+    <a href="#ai-deep">5. AI platform deep dive</a>
+    <a href="#system-design">6. System design</a>
+    <a href="#behavioural">7. Behavioural &amp; tradeoff</a>
+    <a href="#whiteboard">8. Whiteboard problems</a>
+    <a href="#redflags">9. Red flags to avoid</a>
+    <a href="#study-path">10. Recommended study path</a>
+    <div class="section-label">Sibling guides</div>
+    <a href="architect/index.html">Architect Guide</a>
+    <a href="user-guide.html">User Guide</a>
+    <a href="cheatsheet.html">Cheat sheet</a>
+  </nav>
+</aside>
+
+<main>
+
+<h1>Interview Preparation</h1>
+<p class="subtitle">A self-test, not a script. The goal is to be able to <em>have</em> the conversation, not recite the bullet point. Every answer below is one valid framing — the interviewer is testing whether you can defend it under follow-up.</p>
+
+<div class="toc">
+  <h3>On this page</h3>
+  <ol>
+    <li><a href="#how-to">How to use this</a></li>
+    <li><a href="#concepts">Concept catalogue (quick recall)</a></li>
+    <li><a href="#warmup">Warm-up questions</a></li>
+    <li><a href="#ml-deep">ML platform — deep dive Q&amp;A</a></li>
+    <li><a href="#ai-deep">AI / GenAI platform — deep dive Q&amp;A</a></li>
+    <li><a href="#system-design">System design prompts</a></li>
+    <li><a href="#behavioural">Behavioural &amp; tradeoff questions</a></li>
+    <li><a href="#whiteboard">Whiteboard problems</a></li>
+    <li><a href="#redflags">Red flags &amp; common pitfalls</a></li>
+    <li><a href="#study-path">Recommended study path</a></li>
+  </ol>
+</div>
+
+<!-- ========== HOW TO USE ========== -->
+<h2 id="how-to">1. How to use this guide</h2>
+<ul>
+  <li><strong>Read concepts cold.</strong> Try to define each one without peeking. If you can't, that's the section to study.</li>
+  <li><strong>Answer Q&amp;As out loud</strong> before opening the answer. The pause where you think is the actual practice.</li>
+  <li><strong>For system design, draw before reading.</strong> Spend 15 minutes whiteboarding, then compare. The diff is the lesson.</li>
+  <li><strong>Treat tradeoffs as the interview.</strong> Most senior platform interviews are about defending choices under "but what if..." pressure. Practice the second answer, not the first.</li>
+</ul>
+
+<div class="callout gold">
+  <div class="label">Interviewer tell</div>
+  <p>The mark of a senior candidate isn't knowing more facts; it's saying "it depends" and then naming the dimension it depends on. "It depends on how big your eval set is" is a senior answer; "it depends" alone is a junior one.</p>
+</div>
+
+<!-- ========== CONCEPTS ========== -->
+<h2 id="concepts">2. Concept catalogue (quick recall)</h2>
+
+<h3>ML platform</h3>
+<table>
+  <thead><tr><th>Concept</th><th>30-second definition</th></tr></thead>
+  <tbody>
+    <tr><td>Experiment</td><td>A named bucket of runs; the unit of access control and search.</td></tr>
+    <tr><td>Run</td><td>One execution: params in, metrics + artifacts out, identified by <code>run_id</code>.</td></tr>
+    <tr><td>Model (MLmodel)</td><td>A framework-agnostic on-disk format: a YAML manifest plus weights, with one or more <em>flavors</em> describing how to load it.</td></tr>
+    <tr><td>Flavor</td><td>A framework adapter exporting <code>save_model</code> / <code>log_model</code> / <code>load_model</code>; almost all also register a <code>python_function</code> flavor.</td></tr>
+    <tr><td>pyfunc</td><td>The universal callable interface: any model becomes <code>predict(context, model_input)</code>.</td></tr>
+    <tr><td>Signature</td><td>Input + output + params schema enforced by the scoring server.</td></tr>
+    <tr><td>RegisteredModel / ModelVersion</td><td>Named, versioned, immutable pointers to model artifacts.</td></tr>
+    <tr><td>Stage vs Alias</td><td>Stage: legacy four-state ladder. Alias: arbitrary mutable named pointer (<code>champion</code>, <code>challenger</code>); preferred for new work.</td></tr>
+    <tr><td>AbstractStore</td><td>Interface every persistence backend implements; lets MLflow run on FileStore (laptop), SQL (prod), or REST (remote).</td></tr>
+    <tr><td>AsyncLoggingQueue</td><td>In-process buffer that batches <code>log_metric</code>/<code>log_param</code> through <code>log_batch</code>; flushed on <code>end_run</code> and at exit.</td></tr>
+    <tr><td>Artifact repository</td><td>URI-routed file store (<code>s3://</code>, <code>gs://</code>, <code>dbfs:/</code>, ...); five-method interface.</td></tr>
+    <tr><td>Project (MLproject)</td><td>YAML descriptor of an environment + entry points; runnable on local / Docker / K8s / Databricks backends.</td></tr>
+    <tr><td>Scoring server</td><td>Flask WSGI app exposing <code>POST /invocations</code> for any pyfunc model; validates against signature.</td></tr>
+    <tr><td>Deployment plugin</td><td><code>BaseDeploymentClient</code> with <code>create_deployment</code> / <code>predict</code> / <code>list</code> / <code>delete</code>; targets like <code>databricks</code>, <code>sagemaker</code>, <code>openai</code>.</td></tr>
+  </tbody>
+</table>
+
+<h3>AI / GenAI platform <span class="pill ai">AI</span></h3>
+<table>
+  <thead><tr><th>Concept</th><th>30-second definition</th></tr></thead>
+  <tbody>
+    <tr><td>Trace</td><td>A tree of spans for one logical LLM/agent invocation; <code>(TraceInfo, TraceData)</code>.</td></tr>
+    <tr><td>Span</td><td>One operation within a trace; typed (<code>LLM</code>, <code>TOOL</code>, <code>RETRIEVER</code>, <code>AGENT</code>, ...).</td></tr>
+    <tr><td>TraceManager</td><td>In-memory buffer keyed by <code>request_id</code>; finalises and exports the Trace when the root span ends.</td></tr>
+    <tr><td>Private TracerProvider</td><td>MLflow uses its own OTel <code>TracerProvider</code> so it doesn't collide with the user's OTel stack.</td></tr>
+    <tr><td>Auto-tracing</td><td>Per-flavor monkey-patching via <code>safe_patch</code> that wraps SDK entry points and emits typed spans.</td></tr>
+    <tr><td>Chat schema</td><td>Unified message/tool/params model in <code>mlflow/types/chat.py</code> &amp; <code>llm.py</code>; OpenAI-shaped.</td></tr>
+    <tr><td>ChatModel</td><td>Subclass of PythonModel with a typed <code>predict(context, messages, params)</code>; how custom agents get packaged.</td></tr>
+    <tr><td>AI Gateway</td><td>Server in <code>mlflow/gateway/</code> that fronts provider APIs with unified routes (chat, completions, embeddings).</td></tr>
+    <tr><td>Evaluation / Assessment / Judge</td><td>Eval is a row-per-example container; Assessment is one judgment per row; Judges are callables (heuristic / LLM-as-judge / human).</td></tr>
+    <tr><td>Closed loop</td><td>Every LLM call inside an eval is itself traced and linked back by <code>request_id</code>.</td></tr>
+  </tbody>
+</table>
+
+<h3>Cross-cutting patterns</h3>
+<table>
+  <tbody>
+    <tr><td><strong>Store pattern</strong></td><td>Single <code>AbstractStore</code> interface, multiple backends (file/SQL/REST).</td></tr>
+    <tr><td><strong>Flavor pattern</strong></td><td>Same trio across all framework adapters.</td></tr>
+    <tr><td><strong>Client / service / store</strong></td><td>Three-layer architecture: high-level client, RPC translation, persistence.</td></tr>
+    <tr><td><strong>URI-routed registry</strong></td><td>Schemes (<code>s3://</code>, <code>gs://</code>, <code>databricks://</code>) auto-route to the right backend.</td></tr>
+    <tr><td><strong>safe_patch</strong></td><td>One monkey-patch utility; powers both autologging and auto-tracing.</td></tr>
+  </tbody>
+</table>
+
+<!-- ========== WARMUP ========== -->
+<h2 id="warmup">3. Warm-up questions</h2>
+
+<details class="qa">
+  <summary>What problem does MLflow solve, in one sentence?</summary>
+  <div class="answer">
+    <p>It gives you one platform — one client, one server contract, one set of primitives — for tracking experiments, packaging models, versioning them, serving them, and (in the GenAI surface) tracing and evaluating LLM calls; pluggable across backends so the same code runs on a laptop or in a cloud.</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>What are the five (or six) primitives?</summary>
+  <div class="answer">
+    <p>Experiment, Run, Model, RegisteredModel/ModelVersion, Artifact — and Trace if you include the GenAI surface.</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>Why is pyfunc important?</summary>
+  <div class="answer">
+    <p>It's the universal callable interface: any model from any flavor exposes <code>predict(context, model_input)</code>. Tools (scoring server, evaluation, deployment) only need to know pyfunc; they don't care if the underlying model is sklearn, PyTorch, or an Anthropic-backed agent. It's the smallest contract that makes the rest of the platform polymorphic.</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>What's the difference between a stage and an alias on a model version?</summary>
+  <div class="answer">
+    <p>Stage is a legacy four-state enum (None / Staging / Production / Archived) where each version sits in exactly one stage. Alias is an arbitrary mutable named pointer (<code>champion</code>, <code>challenger</code>, <code>eu-prod</code>) that you can attach to any version. Aliases are decoupled from a fixed lifecycle — you choose the semantics. New workflows should use aliases.</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>What goes in an MLmodel file?</summary>
+  <div class="answer">
+    <p>A YAML manifest with: the artifact path, one or more <em>flavors</em> (each describing how to load), an optional signature (input + output schemas), an optional <code>input_example</code>, and the <code>run_id</code>. Almost every native flavor also writes a <code>python_function</code> flavor so the model is loadable through the universal pyfunc interface.</p>
+  </div>
+</details>
+
+<!-- ========== ML DEEP ========== -->
+<h2 id="ml-deep">4. ML platform &mdash; deep dive Q&amp;A</h2>
+
+<details class="qa">
+  <summary>Walk through what happens when you call <code>mlflow.log_metric("loss", 0.1)</code>.</summary>
+  <div class="answer">
+    <p>The fluent API (<code>mlflow/tracking/fluent.py</code>) reads the active <code>run_id</code> from a thread-local. It calls <code>MlflowClient.log_metric</code>, which forwards to <code>TrackingServiceClient.log_metric</code> — the layer that translates Python calls into RPCs. From there it goes to the configured <code>AbstractStore</code> implementation. If async logging is enabled, the call is enqueued and a worker thread flushes batches via <code>log_batch</code>; otherwise it makes a direct call. The store implementation (<code>SqlAlchemyStore</code> in production) inserts a row into the <code>metrics</code> table indexed on <code>(run_uuid, key, step)</code>.</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>Why does MLflow have an async logging queue, and what are the failure modes?</summary>
+  <div class="answer">
+    <p>Synchronous round-trips to the store would dominate training time on tight loops that log thousands of points per second. The queue buffers calls and flushes them in batches, so the training loop runs at training-loop speed. <strong>Failure modes:</strong> on a hard process kill, the in-flight batch can be lost (the queue flushes on <code>end_run</code> and at <code>atexit</code>, but not on SIGKILL). The worker thread can also fall behind under sustained load, growing memory. Failures during a flush surface as warnings rather than crashing the training process.</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>How does MLflow stay framework-agnostic with 28+ flavors?</summary>
+  <div class="answer">
+    <p>Two patterns. (1) <strong>The flavor contract:</strong> every framework module exports <code>save_model</code> / <code>log_model</code> / <code>load_model</code> with the same signature. (2) <strong>The pyfunc registration:</strong> nearly every native flavor also registers a <code>python_function</code> entry in the MLmodel manifest pointing at its loader. So tools downstream don't need to know about sklearn or PyTorch; they call <code>mlflow.pyfunc.load_model(uri)</code> and get something with <code>predict</code>.</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>How is the model registry related to the tracking store?</summary>
+  <div class="answer">
+    <p>They're two separate stores with the same architectural pattern: an <code>AbstractStore</code> interface with <code>FileStore</code> and <code>SqlAlchemyStore</code> implementations. They can share a database in production. A <code>ModelVersion</code> in the registry points at a model artifact in the artifact repository, which was originally produced by a tracking <code>Run</code> — but the registry's lifecycle is independent of the run's. You can delete the run; the registered model version's artifact location is its own.</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>Why YAML for MLmodel and not JSON?</summary>
+  <div class="answer">
+    <p>Practical reasons: humans read it during incidents (<code>aws s3 cp ... -</code> + read), comments are supported, multi-line strings are ergonomic, and it diffs cleanly. JSON would have worked technically; YAML's readability won. The schema is small enough that the YAML/JSON "ambiguity" pitfalls don't bite.</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>What's a model signature, and why should you always pass one?</summary>
+  <div class="answer">
+    <p>A <code>ModelSignature</code> declares input + output + params schemas using <code>Schema</code> and <code>ColSpec</code>. The scoring server validates payloads against it before they reach <code>predict</code>. Without one, malformed payloads either silently produce wrong outputs or crash inside the model — neither is debuggable. With one, you get a 422 with a precise error. It's also what enables the UI's "predict" button and lineage tools.</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>How would you scale the tracking server to 1,000 users?</summary>
+  <div class="answer">
+    <p>The MLflow server is stateless Flask; horizontal scaling is straightforward — N replicas behind an LB. The bottleneck is the database. Concrete steps: (1) move from SQLite/FileStore to Postgres; (2) ensure indexes on <code>(run_uuid, key, step)</code> for metrics, on <code>experiment_id</code> for runs, on <code>(run_uuid, key)</code> for params/tags; (3) PgBouncer for connection pooling; (4) a read replica for the UI's <code>search_runs</code> traffic; (5) consider archiving old metric history to a cold table or time-series store; (6) per-team rate limits at the ingress to prevent noisy-neighbour. The async logging queue on clients also helps — it batches writes.</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>Why is the artifact repository separate from the tracking store?</summary>
+  <div class="answer">
+    <p>Different access patterns and different durability/cost profiles. Tracking data is row-shaped, queryable, indexed — that's a database. Artifacts are bytes — sometimes gigabytes — that you read sequentially and rarely; that's blob storage. Co-locating them would either bloat the database or force the blob store to support querying. The split also lets you swap the artifact backend (S3 ↔ GCS ↔ Azure ↔ DBFS) without touching tracking.</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>What does "store pattern" buy MLflow architecturally?</summary>
+  <div class="answer">
+    <p>Three things. (1) <strong>Portability</strong>: same client API works on a laptop (<code>FileStore</code>), in production (<code>SqlAlchemyStore</code>), and against a remote server (<code>RestStore</code>). (2) <strong>Pluggability for new backends</strong>: someone can write a <code>DynamoDBStore</code> subclass without touching the REST API or Python client. (3) <strong>Testability</strong>: every higher layer can be tested against an in-memory or file-backed store.</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>Walk me through the request path of <code>POST /invocations</code> on a deployed sklearn model.</summary>
+  <div class="answer">
+    <p>(1) Container starts; <code>mlflow models serve -m models:/X@champion</code> resolves the alias to a version, downloads the artifact dir from S3, and starts the Flask scoring server. (2) Request arrives; the server unmarshals one of the supported payload shapes (<code>dataframe_split</code>, <code>dataframe_records</code>, <code>instances</code>, <code>inputs</code>) into a pandas DataFrame. (3) The DataFrame is validated against the signature — wrong types or missing columns fail fast with a 422. (4) <code>pyfunc_loaded.predict(df)</code> is invoked; the pyfunc wrapper delegates to the sklearn flavor's loader, which calls <code>estimator.predict(df)</code>. (5) The result is serialised back to JSON.</p>
+  </div>
+</details>
+
+<!-- ========== AI DEEP ========== -->
+<h2 id="ai-deep">5. AI / GenAI platform &mdash; deep dive Q&amp;A <span class="pill ai">AI</span></h2>
+
+<details class="qa">
+  <summary>What is a Trace and how does it relate to a Run?</summary>
+  <div class="answer">
+    <p>A Trace is a tree of typed Spans capturing one logical LLM/agent invocation. It's stored in the same tracking store as runs and queryable through the same REST API, but it's a <em>sibling</em> of Run, not a child. A Run might capture a training execution; a Trace captures one inference call to a model. Conceptually: Trace : Run :: Span : Metric — both observations, but Span is hierarchical and time-stamped where Metric is a single numeric point.</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>Why does MLflow use a private OpenTelemetry TracerProvider instead of the global one?</summary>
+  <div class="answer">
+    <p>To be a good citizen in processes that already use OTel for their own observability — think PromptFlow, Snowpark, or the user's own distributed tracing. If MLflow installed itself as the global provider, it would either get clobbered by the user's stack or clobber theirs. The private provider in <code>mlflow/tracing/provider.py</code> is isolated; spans flow through MLflow's own pipeline and exporters. The downside is no automatic correlation with the user's existing distributed traces — that has to be wired explicitly.</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>How does auto-tracing for OpenAI work under the hood?</summary>
+  <div class="answer">
+    <p>The <code>mlflow/openai/</code> flavor uses <code>safe_patch</code> from <code>mlflow/utils/autologging_utils/safety.py</code> to monkey-patch <code>OpenAI.chat.completions.create</code>, <code>OpenAI.completions.create</code>, and <code>OpenAI.embeddings.create</code>. The wrapper opens an <code>LLM</code>-typed span, converts the request to MLflow's <code>ChatMessage</code>/<code>ChatTool</code> schema, runs the original call, captures the response and token usage, and closes the span with status, attributes, and output messages. <code>safe_patch</code> ensures any exception in the wrapper is caught and logged at WARN — never propagated to the user's code.</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>Why convert every provider's messages to a single chat schema?</summary>
+  <div class="answer">
+    <p>So that the UI, evaluation tools, and downstream consumers don't have to know which provider produced a span. A single <code>ChatMessage</code> shape lets you compare "the call to OpenAI" with "the call to Anthropic" with "the call to Bedrock" in the same view, run the same safety judge over all three, and migrate between providers without rewriting consumers. The schema is OpenAI-shaped because that's the closest thing to a de facto standard; every other provider gets a converter in its flavor module.</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>Why is ChatModel a subclass of PythonModel rather than a parallel class?</summary>
+  <div class="answer">
+    <p>So agents inherit the entire ML platform's machinery for free: tracking, registry, signatures, scoring server, deployment plugins. A <code>ChatModel</code> is just a typed <code>PythonModel</code> with <code>predict(context, messages, params) -&gt; ChatCompletionResponse</code>. The same Helm chart that deploys a churn classifier deploys a multi-turn agent. The same <code>models:/X@champion</code> URI works for both. This is the architectural thesis: <em>don't build a parallel system</em>.</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>What does the AI Gateway actually do?</summary>
+  <div class="answer">
+    <p>It's a server in front of provider APIs that solves three things: (1) <strong>Provider lock-in</strong> — code calls a stable endpoint name (<code>my-chat</code>) and the gateway routes to OpenAI, Anthropic, Bedrock, etc. by config. (2) <strong>Credentials</strong> — provider keys live in the gateway, not in app code or notebooks. (3) <strong>Governance</strong> — rate limits, request queuing, audit logging are centralised. Routes are typed (chat, completions, embeddings); each provider has an adapter under <code>mlflow/gateway/providers/</code>.</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>How does GenAI evaluation differ from classical ML evaluation?</summary>
+  <div class="answer">
+    <p>Classical eval is "compute these metrics on this holdout set" — deterministic, numeric, ground-truth-based. GenAI eval has to handle non-deterministic outputs and often-absent ground truth. The MLflow model: each row produces <strong>Assessments</strong> (per-row scores from heuristics, LLM-as-judge, or humans) which aggregate into <strong>metrics</strong>. Crucially, every LLM call inside the eval is itself traced — the judge's call leaves a trace, the agent's calls leave traces, and assessments link back by <code>request_id</code>. The eval UI surfaces a low-scoring row one click away from the trace that produced it.</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>When is LLM-as-judge a bad idea?</summary>
+  <div class="answer">
+    <p>Three cases. (1) <strong>Factual correctness without ground truth</strong> — you're outsourcing to the same class of error. (2) <strong>High-stakes domains</strong> (medical, legal, safety-critical) — judges have hallucinations too. (3) <strong>Highly adversarial inputs</strong> — prompt injection in the input being judged can flip the judge's verdict. Mitigations: pair LLM-as-judge with heuristic judges, calibrate against a human-rated set quarterly, and never let user input control the judge's role (use system prompts and structured templates).</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>Why is auto-tracing built on monkey-patching rather than wrapping?</summary>
+  <div class="answer">
+    <p>If we shipped a wrapper SDK ("<code>from mlflow_openai import OpenAI</code>"), every user's existing code would have to change to get observability. Monkey-patching keeps <code>from openai import OpenAI</code> working — observability is an installation, not a refactor. The cost is brittleness to SDK upgrades and complexity in <code>safe_patch</code> to ensure errors in our handler don't propagate. Where SDKs offer first-class callbacks (LangChain, LlamaIndex), MLflow uses those instead — patching is the fallback.</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>What happens end-to-end when a user calls a deployed ChatModel agent?</summary>
+  <div class="answer">
+    <p>(1) The serving endpoint receives <code>POST /invocations</code> with a chat payload. (2) The pyfunc scoring server validates against the ChatModel signature. (3) <code>_ChatModelPyfuncWrapper</code> deserialises into typed <code>ChatMessage</code>s, opens a root <code>AGENT</code> span, calls <code>predict</code>. (4) Inside <code>predict</code>, every LLM call made through an instrumented SDK is auto-traced — each becomes an <code>LLM</code> span under the agent root. (5) Tool calls become <code>TOOL</code> spans; retrieval steps <code>RETRIEVER</code>. (6) The agent returns a <code>ChatCompletionResponse</code>; the wrapper closes the root span; the <code>TraceManager</code> finalises and ships to the configured exporter. (7) The trace lands in the same experiment as the run that registered the agent. Same primitives, all the way down.</p>
+  </div>
+</details>
+
+<!-- ========== SYSTEM DESIGN ========== -->
+<h2 id="system-design">6. System design prompts</h2>
+<p>For each: spend 15 minutes whiteboarding before reading. Score yourself on whether you covered the same dimensions, not whether you reached the same answer.</p>
+
+<h3>6.1 Design an ML experiment tracking system</h3>
+<details class="qa">
+  <summary>Show solution outline</summary>
+  <div class="answer">
+    <p><strong>Requirements to surface:</strong> 1k engineers, ~1M runs/year, ~1B metric points, sub-second query for "show me last 10 runs in this experiment", offline read for dashboards, multi-region.</p>
+    <p><strong>Components:</strong></p>
+    <ul>
+      <li><strong>Stateless API tier</strong> (Flask/FastAPI) behind LB; horizontal scale.</li>
+      <li><strong>Primary store: Postgres.</strong> Tables: experiments, runs, metrics, params, tags. Compound index <code>(run_uuid, key, step)</code> on metrics.</li>
+      <li><strong>Async ingestion path</strong>: client-side batching queue + server-side bulk insert. Optionally Kafka in front of writes for very high QPS.</li>
+      <li><strong>Artifact store</strong>: S3 (or equivalent), URI-routed; co-located with serving region.</li>
+      <li><strong>Read replica</strong> for UI/list queries. Hot run reads from primary, list/search from replica.</li>
+      <li><strong>Cold tier</strong>: archive metric history older than retention to a partitioned table or Parquet on object storage.</li>
+      <li><strong>Auth</strong>: SSO at ingress; per-experiment ACLs.</li>
+      <li><strong>Observability</strong>: per-team write rate, query p95, table sizes, async-queue depth.</li>
+    </ul>
+    <p><strong>Tradeoffs to discuss when prompted:</strong> SQL vs NoSQL (queries are relational, pick SQL); per-team server vs shared (operational burden vs noisy-neighbour); pluggable artifact backend (the URI scheme registry pattern).</p>
+  </div>
+</details>
+
+<h3>6.2 Design an LLM observability platform</h3>
+<details class="qa">
+  <summary>Show solution outline</summary>
+  <div class="answer">
+    <p><strong>Requirements:</strong> capture every LLM call across N services and M provider SDKs; queryable spans; cost attribution; PII safety; sampling for high QPS.</p>
+    <p><strong>Components:</strong></p>
+    <ul>
+      <li><strong>Auto-instrumentation per SDK</strong>: monkey-patch entry points, emit typed spans (<code>LLM</code>, <code>TOOL</code>, <code>RETRIEVER</code>, <code>AGENT</code>). Use first-class callbacks where the SDK offers them.</li>
+      <li><strong>Unified chat schema</strong> as the wire format — all providers convert to it.</li>
+      <li><strong>Private TracerProvider</strong> per process to coexist with the user's OTel.</li>
+      <li><strong>TraceManager</strong>: in-memory buffer keyed by request_id; finalises trace when root span ends.</li>
+      <li><strong>Exporters</strong>: a primary store (your tracking store), an OTel exporter for the user's own pipeline, optionally a cold exporter to object storage.</li>
+      <li><strong>Sampling</strong>: 100% errors, 100% low-confidence, %-sampled successes.</li>
+      <li><strong>PII masking</strong>: at the trace boundary; configurable per attribute.</li>
+      <li><strong>Cost attribution</strong>: capture <code>tokens_in</code>/<code>tokens_out</code>/<code>model</code> per span; per-team / per-route aggregations.</li>
+      <li><strong>Storage</strong>: span tables grow fast — plan TTL, hot/cold split, indexes on <code>(experiment_id, request_id)</code>.</li>
+    </ul>
+    <p><strong>Tradeoffs:</strong> wrap vs patch (patch wins for adoption, costs brittleness); private vs global tracer provider; sampling strategies; cost of full PII vs minimal-attribute traces.</p>
+  </div>
+</details>
+
+<h3>6.3 Design a model registry with safe promotion</h3>
+<details class="qa">
+  <summary>Show solution outline</summary>
+  <div class="answer">
+    <p><strong>Requirements:</strong> versioned, immutable model artifacts; named promotions (<code>champion</code>, <code>challenger</code>, regional); RBAC tiered by environment; auditable; rollback in seconds.</p>
+    <p><strong>Components:</strong></p>
+    <ul>
+      <li><strong>RegisteredModel</strong>: name + tags + description.</li>
+      <li><strong>ModelVersion</strong>: immutable, monotonically incrementing per registered model, points at an artifact URI.</li>
+      <li><strong>Aliases</strong>: arbitrary string &rarr; version pointers; many aliases per version, one version per alias.</li>
+      <li><strong>Alias write RBAC</strong>: <code>shadow</code> open; <code>challenger</code> requires team lead; <code>champion</code> requires on-call sign-off.</li>
+      <li><strong>Audit log</strong>: every alias change is event-logged with actor, before/after.</li>
+      <li><strong>Consumption convention</strong>: prod code never references version numbers; always <code>models:/X@alias</code>.</li>
+      <li><strong>Rollback</strong>: a one-call API that flips the alias back to the previous version (recorded in audit).</li>
+    </ul>
+    <p><strong>Tradeoffs:</strong> stages vs aliases (cardinality, decoupling from lifecycle); copy bytes vs metadata flip on promotion (metadata flip wins for speed and rollback); RBAC at platform vs at gateway in front (platform-level avoids the per-team enforcement gap).</p>
+  </div>
+</details>
+
+<h3>6.4 Design a unified inference gateway for multiple LLM providers</h3>
+<details class="qa">
+  <summary>Show solution outline</summary>
+  <div class="answer">
+    <p><strong>Requirements:</strong> N providers, M client teams, unified URL, central key management, per-team rate limits and cost attribution, audit, low-latency.</p>
+    <p><strong>Components:</strong></p>
+    <ul>
+      <li><strong>Typed routes</strong>: chat, completions, embeddings — provider-agnostic schema in / provider-agnostic schema out.</li>
+      <li><strong>Provider adapters</strong>: one per backend, mapping route schema to provider-specific calls.</li>
+      <li><strong>Key management</strong>: keys in the gateway's secret store, never in clients. Rotate aggressively.</li>
+      <li><strong>Per-team / per-route rate limits</strong>: token-bucket; clear 429 with <code>Retry-After</code>.</li>
+      <li><strong>Idempotency</strong>: optional client request ID for retry safety.</li>
+      <li><strong>Audit log</strong>: shipped to SIEM; keys never logged; payload PII configurable.</li>
+      <li><strong>Cost attribution</strong>: count tokens in/out per call, attribute by team + route; surface in dashboards.</li>
+      <li><strong>Reliability</strong>: timeouts, circuit breakers, optional fallback route on provider 5xx.</li>
+      <li><strong>Caching (optional)</strong>: exact-match or semantic cache, with care around staleness and PII.</li>
+    </ul>
+    <p><strong>Tradeoffs:</strong> single gateway region vs multi-region (latency vs blast radius); semantic cache (cost win, correctness risk); whether to do retry inside the gateway or push to clients.</p>
+  </div>
+</details>
+
+<h3>6.5 Design an evaluation harness for an LLM agent</h3>
+<details class="qa">
+  <summary>Show solution outline</summary>
+  <div class="answer">
+    <p><strong>Requirements:</strong> reproducible eval on a versioned dataset; multiple judges per row; LLM-as-judge plus heuristics plus humans; per-PR gate; explainable failures.</p>
+    <p><strong>Components:</strong></p>
+    <ul>
+      <li><strong>Eval set</strong>: in version control; rows are <code>(input, optional_target, metadata)</code>.</li>
+      <li><strong>Runner</strong>: invokes the agent on each row; captures the trace.</li>
+      <li><strong>Judges</strong>: pluggable callables. Heuristic (regex, JSON validity, contains-keyword), LLM-as-judge (templated prompt against a strong model), human (UI for sampling).</li>
+      <li><strong>Assessment storage</strong>: per-row, with <code>name</code>, <code>value</code>, <code>rationale</code>, <code>source</code>, <code>error</code>.</li>
+      <li><strong>Aggregation</strong>: rolled into metrics (mean, p50, p95).</li>
+      <li><strong>Trace linking</strong>: each assessment carries the agent's <code>request_id</code>; UI lets you jump from a low-scoring row to the trace.</li>
+      <li><strong>Calibration</strong>: recurring job that compares LLM-judge against the human-rated subset; alarms on drift.</li>
+      <li><strong>CI gate</strong>: per-PR re-run; fail on regression vs baseline above tolerance.</li>
+    </ul>
+    <p><strong>Tradeoffs:</strong> LLM-judge cost vs frequency (every PR is expensive on a 5k row set; sample); judge prompt brittleness; human judgement throughput as a bottleneck.</p>
+  </div>
+</details>
+
+<!-- ========== BEHAVIOURAL ========== -->
+<h2 id="behavioural">7. Behavioural &amp; tradeoff questions</h2>
+
+<details class="qa">
+  <summary>Tell me about a time you balanced velocity and reliability on a platform team.</summary>
+  <div class="answer">
+    <p><strong>Frame:</strong> name the conflict, describe the resolution mechanism (not the resolution itself), name the residual cost.</p>
+    <p><strong>Example shape:</strong> "Our DS team wanted self-serve promotions; SRE wanted gated. We didn't pick one — we tiered: <code>shadow</code> alias was self-serve, <code>champion</code> required on-call sign-off, alias-write RBAC enforced it. The residual cost was that the tier had to be communicated explicitly; we wrote it into the runbook and the registry UI surfaced the policy. Outcome: time-to-shadow dropped to minutes; champion promotions stayed safe."</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>How do you decide between building a feature in the platform and pushing it to product teams?</summary>
+  <div class="answer">
+    <p><strong>Heuristic:</strong> if N teams will need it within 12 months and the abstraction is stable, platform owns it. If only one team needs it, or the abstraction is changing weekly, the team owns it. The cost of premature platformisation is locking in a wrong shape; the cost of late platformisation is N reinventions. Track which capabilities multiple teams have built — that's the signal.</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>A PM wants a feature that needs an unapproved LLM provider. What do you do?</summary>
+  <div class="answer">
+    <p>Two parallel tracks. (1) Run the security/legal review in parallel with whatever development can happen on a sanctioned provider. (2) If the PM's deadline is binding, scope the feature to the sanctioned provider; ship something; revisit when the new provider is approved. The trap is treating "approved provider list" as immutable — make sure there's a path to add providers, with an SLA. The gateway makes the swap a config change.</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>A data scientist won't follow the eval-gate process. How do you handle it?</summary>
+  <div class="answer">
+    <p>Find out why before enforcing. Common root causes: the eval is too slow (fix the runner, not the policy), the eval set is irrelevant to their model (let them PR new rows), the gate's failure messages are unhelpful (improve the diagnostics), or they don't understand the value (show them the last incident the eval would have caught). Enforcement without root-cause is theatre; the workaround surfaces somewhere else.</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>How do you justify the cost of the platform to a CFO?</summary>
+  <div class="answer">
+    <p>Three numbers, framed as counterfactuals: (1) <strong>Engineer hours saved</strong> — how many hours would N teams spend reinventing tracking/registry/serving without it? (2) <strong>Incidents prevented</strong> — what's the production incident rate before vs after the eval gate, the signature requirement, the gateway's rate limits? (3) <strong>Provider cost reduction</strong> — what % did per-team gateway routing + sampling cut. Anchor every claim in a measurement, not a vibe.</p>
+  </div>
+</details>
+
+<!-- ========== WHITEBOARD ========== -->
+<h2 id="whiteboard">8. Whiteboard problems</h2>
+
+<details class="qa">
+  <summary>Sketch the AbstractStore interface with the five most important methods.</summary>
+  <div class="answer">
+    <pre><code>class AbstractStore(ABC):
+    @abstractmethod
+    def create_run(self, experiment_id: str, user_id: str, start_time: int,
+                   tags: list[RunTag]) -&gt; Run: ...
+    @abstractmethod
+    def search_runs(self, experiment_ids: list[str], filter_string: str,
+                    run_view_type: ViewType, max_results: int,
+                    order_by: list[str], page_token: str) -&gt; PagedList[Run]: ...
+    @abstractmethod
+    def log_batch(self, run_id: str, metrics: list[Metric],
+                  params: list[Param], tags: list[RunTag]) -&gt; None: ...
+    @abstractmethod
+    def get_metric_history(self, run_id: str, metric_key: str) -&gt; list[Metric]: ...
+    @abstractmethod
+    def update_run_info(self, run_id: str, run_status: RunStatus,
+                        end_time: int) -&gt; RunInfo: ...</code></pre>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>Sketch <code>safe_patch</code> in pseudocode.</summary>
+  <div class="answer">
+    <pre><code>def safe_patch(target_module, function_name, patch_function):
+    original = getattr(target_module, function_name)
+
+    @functools.wraps(original)
+    def wrapper(*args, **kwargs):
+        try:
+            # &lt;-- our pre-call instrumentation runs here
+            patch_state = patch_function.before(args, kwargs)
+        except Exception as e:
+            log.warning("MLflow instrumentation pre-call failed", exc_info=e)
+            patch_state = None
+
+        try:
+            result = original(*args, **kwargs)
+        except Exception:
+            try:
+                patch_function.on_error(patch_state)
+            except Exception as e:
+                log.warning("MLflow instrumentation error-path failed", exc_info=e)
+            raise  # re-raise the user's original exception unchanged
+
+        try:
+            patch_function.after(patch_state, result)
+        except Exception as e:
+            log.warning("MLflow instrumentation post-call failed", exc_info=e)
+
+        return result
+
+    setattr(target_module, function_name, wrapper)</code></pre>
+    <p><strong>Key invariants:</strong> the user's call always runs; the user's exception always propagates unchanged; our instrumentation failures only WARN. That's the contract.</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>Write a tiny <code>ChatModel</code> that calls Anthropic and returns a response.</summary>
+  <div class="answer">
+    <pre><code>import mlflow
+from mlflow.pyfunc import ChatModel
+from mlflow.types.llm import ChatCompletionResponse, ChatMessage, ChatChoice
+from anthropic import Anthropic
+
+class MyAgent(ChatModel):
+    def load_context(self, context):
+        self.client = Anthropic()  # API key from env
+
+    def predict(self, context, messages: list[ChatMessage], params):
+        # convert MLflow ChatMessages to Anthropic message format
+        anthro_msgs = [{"role": m.role, "content": m.content} for m in messages]
+        resp = self.client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=params.max_tokens or 1024,
+            messages=anthro_msgs,
+        )
+        # auto-tracing already records the LLM call; we just return shaped output
+        return ChatCompletionResponse(
+            choices=[ChatChoice(
+                index=0,
+                message=ChatMessage(role="assistant", content=resp.content[0].text),
+                finish_reason=resp.stop_reason,
+            )],
+            model=resp.model,
+        )
+
+# log it
+with mlflow.start_run():
+    mlflow.pyfunc.log_model(
+        artifact_path="agent",
+        python_model=MyAgent(),
+        pip_requirements=["anthropic"],
+    )</code></pre>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>A query is slow: <code>SELECT * FROM metrics WHERE run_uuid='X' AND key='loss' ORDER BY step</code>. Diagnose.</summary>
+  <div class="answer">
+    <p>Likely missing or unused composite index on <code>(run_uuid, key, step)</code>. <code>EXPLAIN ANALYZE</code> will show seq scan or wrong index. Fix: add <code>CREATE INDEX CONCURRENTLY idx_metrics_run_key_step ON metrics (run_uuid, key, step)</code>. Validate with another <code>EXPLAIN</code>. If the table is huge and writes are heavy, consider partitioning by <code>run_uuid</code> hash or by time. If the result set itself is large (100k points), the bottleneck may be transfer — add downsampling at the API layer.</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>You've enabled tracing in production and the tracking DB is doubling weekly. What do you do?</summary>
+  <div class="answer">
+    <p>Short term: (1) turn sampling on — 100% errors, sample successes; (2) shrink span attributes — drop verbose payloads. Medium term: (3) move trace storage off the same Postgres into a dedicated store with a TTL (object-storage-backed cold tier, or a time-series DB); (4) prune span content older than retention while keeping headers. Strategic: (5) audit which spans are high-volume and ask whether they're observable enough as aggregate metrics rather than per-call spans.</p>
+  </div>
+</details>
+
+<!-- ========== RED FLAGS ========== -->
+<h2 id="redflags">9. Red flags &amp; common pitfalls</h2>
+
+<table>
+  <thead><tr><th>Antipattern in interviews</th><th>Why it's a flag</th><th>What to say instead</th></tr></thead>
+  <tbody>
+    <tr><td>"MLflow is just experiment tracking"</td><td>Misses 80% of the platform</td><td>Name the five (six) primitives and the store/flavor patterns</td></tr>
+    <tr><td>"Use FileStore in production, it's simpler"</td><td>You haven't seen concurrent writes break it</td><td>SQL backend in prod; FileStore for laptop/CI only</td></tr>
+    <tr><td>"Just use stages, it's the standard"</td><td>You're recommending the deprecated path</td><td>Aliases for new work; explain why the migration happened</td></tr>
+    <tr><td>"Pickle is fine, everyone uses it"</td><td>Skips the security tradeoff</td><td>Pickle is the Python ML reality; mitigate with trusted artifact locations and ONNX/SavedModel where compliance demands it</td></tr>
+    <tr><td>"LLM-as-judge solves evaluation"</td><td>Naive; eval will silently drift</td><td>LLM-as-judge for scale, calibrated against a human-rated set, paired with heuristics</td></tr>
+    <tr><td>"Just use the global OTel provider"</td><td>Missed the design choice</td><td>Private TracerProvider so MLflow doesn't collide with the user's OTel</td></tr>
+    <tr><td>"Build our own gateway, it's not that hard"</td><td>Underestimates rate limits, retry, idempotency, key rotation, audit</td><td>Use the gateway; only deviate with a clear reason</td></tr>
+    <tr><td>"Trace everything in prod"</td><td>Cost-blind</td><td>Sample successes; capture all errors; cold-tier policy from day one</td></tr>
+    <tr><td>"It depends" with no follow-up</td><td>Empty answer</td><td>"It depends on X — if X then Y, otherwise Z"</td></tr>
+    <tr><td>Recommending a stack you've only read about</td><td>Senior interviewers smell this in two questions</td><td>Defend what you've actually run; be honest about what you've only studied</td></tr>
+  </tbody>
+</table>
+
+<!-- ========== STUDY PATH ========== -->
+<h2 id="study-path">10. Recommended study path</h2>
+<ol>
+  <li><strong>Read the source map.</strong> Skim <code>mlflow/tracking/</code>, <code>mlflow/store/</code>, <code>mlflow/models/</code>, <code>mlflow/pyfunc/</code>, <code>mlflow/tracing/</code>, <code>mlflow/gateway/</code>, <code>mlflow/evaluation/</code>. You don't need to read every file — read the <code>__init__.py</code> and any <code>abstract*.py</code>.</li>
+  <li><strong>Run the five-minute path.</strong> Locally with FileStore. Then with Postgres. Then point at S3/MinIO for artifacts. Each switch teaches a layer.</li>
+  <li><strong>Wrap a sklearn model and a ChatModel.</strong> Same registry, same scoring server, different signatures. Feel the unification.</li>
+  <li><strong>Turn on auto-tracing for one SDK</strong> (OpenAI, Anthropic, or LangChain). Read the resulting trace in the UI. Trace your own function with <code>@mlflow.trace</code>.</li>
+  <li><strong>Build a 30-row eval set.</strong> Run <code>mlflow.evaluate</code> with one heuristic judge and one LLM-as-judge. Inspect the assessments-to-trace linking.</li>
+  <li><strong>Read the architect guide</strong> (<a href="architect-guide.html">link</a>) end to end. Each roundtable is a question someone is going to ask.</li>
+  <li><strong>Mock-interview yourself</strong> with the system design prompts. Time-box. Compare against the outlines.</li>
+  <li><strong>Find the corner cases.</strong> What happens if you call <code>log_metric</code> after <code>end_run</code>? What if two processes write to the same FileStore? What if the artifact backend is briefly unreachable? The interview will go here.</li>
+</ol>
+
+<div class="callout good">
+  <div class="label">Final thought</div>
+  <p>Senior platform interviews are hardly ever "do you know the API" — they're "can you defend a design choice when challenged." Practice the second answer to every question, not the first. The first answer shows you read; the second shows you understood.</p>
+</div>
+
+<footer class="page-footer">
+  <p>Back to the <a href="index.html">overview</a>, the <a href="architect/index.html">Architect Guide</a>, the <a href="user-guide.html">User Guide</a>, or the <a href="cheatsheet.html">cheat sheet</a>.</p>
+</footer>
+
+</main>
+</div>
+
+</body>
+</html>

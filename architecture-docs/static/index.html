@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MLflow Architecture — Deep Dive (Static)</title>
+<meta name="description" content="A deep-dive static guide to the MLflow ML platform and the GenAI/AI platform — for platform architects, end users, and interview preparation.">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="shell">
+
+<aside class="sidebar">
+  <h1>Deep&nbsp;Dive</h1>
+  <nav>
+    <a href="index.html" class="active">Overview</a>
+    <div class="section-label">Guides</div>
+    <a href="architect/index.html">Architect Guide (chapters)</a>
+    <a href="user-guide.html">User Guide &amp; Best Practices</a>
+    <a href="interview-prep.html">Interview Preparation</a>
+    <a href="cheatsheet.html">One-page Cheat Sheet</a>
+    <div class="section-label">Alternate views</div>
+    <a href="architect-guide.html">Architect (single page)</a>
+    <a href="../index.html">Markdown index</a>
+    <a href="../ml-platform.html">ML platform (.md)</a>
+    <a href="../ai-platform.html">AI platform (.md)</a>
+  </nav>
+  <div class="pill-row">
+    <span class="pill ml">ML platform</span>
+    <span class="pill ai">AI / GenAI</span>
+  </div>
+</aside>
+
+<main>
+
+<section class="hero">
+  <h1>MLflow Architecture — Deep Dive</h1>
+  <p>A static, opinionated walkthrough of how the traditional ML platform and the GenAI/AI platform are built, why the design choices were made, and how to operate and extend them. Written for engineers who want to think like the people who shipped it.</p>
+  <div class="badges">
+    <span>5 ML primitives</span>
+    <span>14+ auto-traced LLM SDKs</span>
+    <span>28+ flavors</span>
+    <span>One pluggable store contract</span>
+  </div>
+</section>
+
+<h2>Pick your entry point</h2>
+<p>Three sibling guides, written to be read independently. Each one tells the same story from a different vantage point.</p>
+
+<div class="card-grid">
+  <a class="card" href="architect/index.html">
+    <span class="tag both">Architect</span>
+    <h3>Architect Guide &rarr;</h3>
+    <p>Six focused chapters with inline SVG diagrams: storage, packaging, serving, tracing, agents, and operations. Each chapter contains the roundtables that argue through its tradeoffs.</p>
+  </a>
+  <a class="card" href="user-guide.html">
+    <span class="tag both">User</span>
+    <h3>User Guide &amp; Best Practices &rarr;</h3>
+    <p>How data scientists, ML engineers, and AI engineers should actually use the platform &mdash; plus how to balance the wishes of PMs, SREs, security, and other stakeholders.</p>
+  </a>
+  <a class="card" href="interview-prep.html">
+    <span class="tag gold" style="background:rgba(212,160,23,.12);color:#b8860b;">Interview</span>
+    <h3>Interview Preparation &rarr;</h3>
+    <p>Concept catalogue, system-design prompts, behavioural framing, and 40+ Q&amp;As at the depth a senior platform interview expects. Use it as a self-test, not a script.</p>
+  </a>
+  <a class="card" href="cheatsheet.html">
+    <span class="tag both" style="background:rgba(212,160,23,.12);color:#b8860b;">Revision</span>
+    <h3>One-page Cheat Sheet &rarr;</h3>
+    <p>Every key fact on one screen &mdash; primitives, defaults, anti-patterns, stakeholder roles, end-to-end flows. For last-minute review or a desk reference.</p>
+  </a>
+</div>
+
+<h2>The thesis in one minute</h2>
+<p>MLflow is a thin Python client and Flask server in front of a <strong>pluggable backend</strong>. The same five primitives — <em>Experiment, Run, Model, Registered Model, Artifact</em> — flow through every layer. The GenAI platform reuses all of that and adds a sixth: the <em>Trace</em>. Once you internalise that, the entire codebase falls into place.</p>
+
+<div class="callout">
+  <div class="label">Architectural thesis</div>
+  <p>Don't build a parallel system for LLMs. Extend the one you already have. Trace is to a Run what Span is to a Metric — a richer, time-stamped, hierarchical observation, but stored, queried, and exported through the same machinery.</p>
+</div>
+
+<h2>The map</h2>
+
+<table>
+  <thead>
+    <tr><th>Layer</th><th>ML platform</th><th>AI / GenAI extension</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Observation</strong></td>
+      <td>Run with metrics, params, tags</td>
+      <td>Trace with span tree (LLM, tool, retriever, agent)</td>
+    </tr>
+    <tr>
+      <td><strong>Packaging</strong></td>
+      <td><code>MLmodel</code> with framework flavor + <code>pyfunc</code></td>
+      <td><code>ChatModel</code> as a typed pyfunc subclass</td>
+    </tr>
+    <tr>
+      <td><strong>Registry</strong></td>
+      <td>Registered models, versions, aliases (champion/challenger)</td>
+      <td>Same — agents are registered models</td>
+    </tr>
+    <tr>
+      <td><strong>Serving</strong></td>
+      <td>Pyfunc scoring server, <code>/invocations</code></td>
+      <td>Same server, plus the AI Gateway in front of provider APIs</td>
+    </tr>
+    <tr>
+      <td><strong>Evaluation</strong></td>
+      <td>Numeric metrics on holdout sets</td>
+      <td>Judges (LLM-as-judge + heuristics) producing assessments per row, linked to traces</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>How these guides talk</h2>
+<p>Throughout the architect and user guides, you'll see <em>roundtables</em> like this one — short dialogues between roles arguing through a tradeoff. They are the design conversations that should happen before you ship. The roles you'll meet:</p>
+
+<div class="roundtable">
+  <div class="topic">The cast you'll meet in roundtables</div>
+  <div class="msg arch">
+    <div class="who"><span class="avatar">A</span> Architect <span class="role-label">/the long view</span></div>
+    <div class="body">Cares about coherence, blast radius, and what the next migration costs.</div>
+  </div>
+  <div class="msg dba">
+    <div class="who"><span class="avatar">D</span> Storage <span class="role-label">/the truth</span></div>
+    <div class="body">Cares about durability, throughput, and what your "just one more index" actually costs at 10&times; load.</div>
+  </div>
+  <div class="msg mle">
+    <div class="who"><span class="avatar">M</span> ML&nbsp;Engineer <span class="role-label">/the productionist</span></div>
+    <div class="body">Cares about reproducibility, drift, and the thing the data scientist forgot to commit.</div>
+  </div>
+  <div class="msg ai">
+    <div class="who"><span class="avatar">G</span> AI&nbsp;Engineer <span class="role-label">/the agent wrangler</span></div>
+    <div class="body">Cares about latency, cost-per-call, prompt versioning, and what the LLM did when no one was looking.</div>
+  </div>
+  <div class="msg pm">
+    <div class="who"><span class="avatar">P</span> Product&nbsp;Manager <span class="role-label">/the user voice</span></div>
+    <div class="body">Cares about time-to-value, the demo on Friday, and that a feature exists at all.</div>
+  </div>
+  <div class="msg sre">
+    <div class="who"><span class="avatar">S</span> SRE <span class="role-label">/the pager</span></div>
+    <div class="body">Cares about SLOs, blast radius, runbooks, and not being woken at 3am.</div>
+  </div>
+  <div class="msg sec">
+    <div class="who"><span class="avatar">X</span> Security <span class="role-label">/the threat model</span></div>
+    <div class="body">Cares about secrets, PII, supply chain, and the audit log.</div>
+  </div>
+  <div class="msg ds">
+    <div class="who"><span class="avatar">N</span> Data&nbsp;Scientist <span class="role-label">/the explorer</span></div>
+    <div class="body">Cares about velocity, notebook ergonomics, and not being told to use a JIRA ticket to log a metric.</div>
+  </div>
+</div>
+
+<h2>How to deploy this site</h2>
+<p>Open any HTML file directly from disk in a browser — no build step. To publish on GitHub Pages, push <code>architecture-docs/</code> to <code>master</code>; the workflow at <code>.github/workflows/architecture-docs.yml</code> serves the entire folder, including this <code>static/</code> subdirectory, at <code>/mlflow/static/</code>.</p>
+
+<div class="callout good">
+  <div class="label">Local preview</div>
+  <p>You can simply double-click <code>index.html</code> — no Jekyll, no Ruby, no <code>bundle install</code>. The pages are entirely self-contained: one shared <code>styles.css</code>, no JavaScript, no external assets. Works offline.</p>
+</div>
+
+<footer class="page-footer">
+  <p>Part of the MLflow Architecture Docs. The Markdown originals live in <a href="../">architecture-docs/</a>. Source code is at <a href="https://github.com/SrikanthVelpuri/mlflow">github.com/SrikanthVelpuri/mlflow</a>.</p>
+</footer>
+
+</main>
+</div>
+
+</body>
+</html>
