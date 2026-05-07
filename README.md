@@ -42,6 +42,22 @@ Alternatively, you can install MLflow from on differnet package hosting platform
 
 Official documentation for MLflow can be found at [here](https://mlflow.org/docs/latest/index.html).
 
+### Architecture Deep Dive (this fork)
+
+This fork ships an opinionated architectural walkthrough of the MLflow codebase, published as a GitHub Pages site from [architecture-docs/](architecture-docs/):
+
+- 🏛️ **[Architecture site — landing page](https://srikanthvelpuri.github.io/mlflow/)** — start here
+- 🧩 **[ML Platform deep dive](https://srikanthvelpuri.github.io/mlflow/ml-platform.html)** — tracking, models, registry, projects, serving
+- 🤖 **[AI / GenAI Platform deep dive](https://srikanthvelpuri.github.io/mlflow/ai-platform.html)** — tracing, evaluation, ChatModel, AI Gateway
+
+Interactive HTML guides (single-page references):
+
+- 📖 **[Overview](https://srikanthvelpuri.github.io/mlflow/static/index.html)**
+- 👷 **[Platform Architect Guide](https://srikanthvelpuri.github.io/mlflow/static/architect-guide.html)**
+- 🧑‍💻 **[User Guide & Best Practices](https://srikanthvelpuri.github.io/mlflow/static/user-guide.html)**
+- 🎯 **[Interview Preparation](https://srikanthvelpuri.github.io/mlflow/static/interview-prep.html)**
+- 📋 **[Cheatsheet](https://srikanthvelpuri.github.io/mlflow/static/cheatsheet.html)**
+
 ## Usage
 
 ### Experiment Tracking ([Doc](https://mlflow.org/docs/latest/tracking.html))

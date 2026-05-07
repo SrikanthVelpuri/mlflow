@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cheat Sheet &mdash; MLflow Deep Dive</title>
+<meta name="description" content="One-screen revision sheet: every key fact about the MLflow ML and AI platform, organised for last-minute review.">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="shell">
+
+<aside class="sidebar">
+  <h1>Cheat&nbsp;Sheet</h1>
+  <nav>
+    <a href="index.html">&larr; Overview</a>
+    <div class="section-label">Guides</div>
+    <a href="architect/index.html">Architect Guide</a>
+    <a href="user-guide.html">User Guide</a>
+    <a href="interview-prep.html">Interview Prep</a>
+  </nav>
+</aside>
+
+<main>
+
+<h1>Cheat Sheet</h1>
+<p class="subtitle">Every key fact, one screen. Use as a last-minute revision pass; deeper context lives in the <a href="architect/index.html">Architect Guide</a>.</p>
+
+<div class="cheat-grid">
+
+  <div class="cheat-block ml">
+    <h4>The 5 (6) primitives</h4>
+    <ul>
+      <li><b>Experiment</b> &mdash; bucket of runs</li>
+      <li><b>Run</b> &mdash; one execution; metrics + params + artifacts</li>
+      <li><b>Model</b> &mdash; <code>MLmodel</code> manifest + weights</li>
+      <li><b>RegisteredModel + Version</b> &mdash; named, versioned pointer</li>
+      <li><b>Artifact</b> &mdash; any file logged to a run</li>
+      <li><b>Trace</b> <span class="pill ai">AI</span> &mdash; tree of spans</li>
+    </ul>
+  </div>
+
+  <div class="cheat-block">
+    <h4>Cross-cutting patterns</h4>
+    <ul>
+      <li><b>Store pattern</b> &mdash; one Abstract, many backends</li>
+      <li><b>Flavor pattern</b> &mdash; same trio for every framework</li>
+      <li><b>Client / service / store</b> &mdash; 3-layer split</li>
+      <li><b>URI-routed registry</b> &mdash; scheme picks backend</li>
+      <li><b>safe_patch</b> &mdash; one monkey-patch util</li>
+    </ul>
+  </div>
+
+  <div class="cheat-block ml">
+    <h4>Tracking storage</h4>
+    <ul>
+      <li><b>FileStore</b> &mdash; YAML/JSON; dev only</li>
+      <li><b>SqlAlchemyStore</b> &mdash; PG / MySQL / SQLite / MSSQL; prod</li>
+      <li><b>RestStore</b> &mdash; talks to remote MLflow server</li>
+      <li>Hot-path index: <code>(run_uuid, key, step)</code> on metrics</li>
+      <li>Schema migrations: Alembic under <code>store/db_migrations/</code></li>
+    </ul>
+  </div>
+
+  <div class="cheat-block ml">
+    <h4>Artifact backends</h4>
+    <ul>
+      <li><code>file://</code> &rarr; LocalArtifactRepository</li>
+      <li><code>s3://</code> / <code>gs://</code> / <code>wasbs://</code> / <code>abfss://</code></li>
+      <li><code>dbfs:/</code> / <code>databricks://</code> for DBFS / UC</li>
+      <li>5-method contract: <code>log_artifact(s)</code>, <code>list</code>, <code>download</code>, <code>delete</code></li>
+      <li>Co-locate with serving region or pay round-trips</li>
+    </ul>
+  </div>
+
+  <div class="cheat-block">
+    <h4>Async logging queue</h4>
+    <ul>
+      <li>Per-run worker thread; batches via <code>log_batch</code></li>
+      <li>Flushed on <code>end_run</code> + <code>atexit</code></li>
+      <li>SIGKILL can lose in-flight batch</li>
+      <li>Default ON; turn off only for one-shot scripts</li>
+    </ul>
+  </div>
+
+  <div class="cheat-block ml">
+    <h4>Model packaging</h4>
+    <ul>
+      <li><code>MLmodel</code> = YAML manifest + weights</li>
+      <li>Every flavor exports <code>save_/log_/load_model</code></li>
+      <li>Almost all also register a <code>python_function</code> flavor</li>
+      <li><code>pyfunc.load_model(uri).predict(x)</code> &mdash; universal</li>
+      <li><b>Always</b> pass <code>signature=</code> + <code>input_example=</code></li>
+    </ul>
+  </div>
+
+  <div class="cheat-block ml">
+    <h4>Registry: stages vs aliases</h4>
+    <ul>
+      <li><b>Stages</b>: legacy 4-state ladder (deprecated for new work)</li>
+      <li><b>Aliases</b>: arbitrary mutable pointers; many per version</li>
+      <li>Promotion = re-point alias (no copy)</li>
+      <li>RBAC alias-write per environment</li>
+      <li>Consume as <code>models:/X@champion</code> &mdash; never version#</li>
+    </ul>
+  </div>
+
+  <div class="cheat-block ml">
+    <h4>Serving</h4>
+    <ul>
+      <li>Pyfunc scoring server: Flask, <code>POST /invocations</code></li>
+      <li>Payloads: <code>dataframe_split/_records</code>, <code>instances</code>, <code>inputs</code></li>
+      <li>Signature validated before <code>predict</code></li>
+      <li>Plugins: <code>databricks</code>, <code>sagemaker</code>, <code>openai</code>, <code>mlflow</code></li>
+      <li>Pin URI at build time; never resolve aliases on hot path</li>
+    </ul>
+  </div>
+
+  <div class="cheat-block ai">
+    <h4>Tracing</h4>
+    <ul>
+      <li>Span types: <code>LLM</code>, <code>CHAIN</code>, <code>AGENT</code>, <code>TOOL</code>, <code>RETRIEVER</code>, <code>EMBEDDING</code>, <code>RERANKER</code>, <code>PARSER</code></li>
+      <li><b>Private TracerProvider</b> &mdash; doesn't collide with user OTel</li>
+      <li>Buffer in <code>TraceManager</code>, finalised when root ends</li>
+      <li>Exporters: MLflow store / OTel / Inference Table</li>
+    </ul>
+  </div>
+
+  <div class="cheat-block ai">
+    <h4>Auto-tracing</h4>
+    <ul>
+      <li>Pattern: <code>safe_patch</code> wraps SDK entry point</li>
+      <li>Convert to MLflow chat schema; emit typed span</li>
+      <li>Errors in our handler &mdash; WARN, never propagate</li>
+      <li>14+ libs: OpenAI, Anthropic, LangChain, Bedrock, Gemini, Groq, Mistral, LiteLLM, CrewAI, Autogen, &hellip;</li>
+      <li>Use first-class callbacks (LangChain) over patching where available</li>
+    </ul>
+  </div>
+
+  <div class="cheat-block ai">
+    <h4>ChatModel</h4>
+    <ul>
+      <li>Subclass of <code>PythonModel</code>; typed in/out</li>
+      <li><code>predict(ctx, msgs: list[ChatMessage], params) &rarr; ChatCompletionResponse</code></li>
+      <li>Inherits the <em>entire</em> tracking/registry/serving stack</li>
+      <li>Same Helm chart deploys agent and classifier</li>
+    </ul>
+  </div>
+
+  <div class="cheat-block ai">
+    <h4>AI Gateway</h4>
+    <ul>
+      <li>Solves: provider lock-in, key mgmt, governance</li>
+      <li>Typed routes: chat, completions, embeddings</li>
+      <li>One adapter per provider in <code>gateway/providers/</code></li>
+      <li>Provider swap = config change, not code</li>
+    </ul>
+  </div>
+
+  <div class="cheat-block ai">
+    <h4>GenAI evaluation</h4>
+    <ul>
+      <li><b>Evaluation</b> = rows; <b>Assessment</b> = per-row judgment</li>
+      <li>Judge = heuristic / LLM-as-judge / human</li>
+      <li>Closed loop: judge LLM call is also traced</li>
+      <li>Calibrate LLM judge vs human-rated set quarterly</li>
+    </ul>
+  </div>
+
+  <div class="cheat-block">
+    <h4>Defaults that are usually right</h4>
+    <ul>
+      <li>Postgres for tracking</li>
+      <li>S3/GCS/Azure native to your cloud for artifacts</li>
+      <li>Async logging ON</li>
+      <li>Aliases over stages</li>
+      <li>Signature on every model</li>
+      <li>Gateway for any multi-provider work</li>
+      <li>Sampling on for prod traces</li>
+    </ul>
+  </div>
+
+  <div class="cheat-block warn" style="border-left:4px solid var(--warn);">
+    <h4 style="color:var(--warn);">Anti-patterns</h4>
+    <ul>
+      <li>Logging into "Default" experiment</li>
+      <li>Hardcoding version numbers in prod code</li>
+      <li>Skipping <code>signature=</code></li>
+      <li>Logging full datasets as artifacts</li>
+      <li>Tracking server exposed without auth</li>
+      <li>Unbounded agent loops</li>
+      <li>LLM-as-judge without calibration</li>
+      <li>PII in span attributes</li>
+    </ul>
+  </div>
+
+  <div class="cheat-block">
+    <h4>Promotion ladder (recommended)</h4>
+    <ul>
+      <li><code>shadow</code> alias &mdash; self-serve</li>
+      <li><code>challenger</code> &mdash; team lead approval</li>
+      <li><code>champion</code> &mdash; on-call sign-off</li>
+      <li>Enforced via alias-write RBAC</li>
+      <li>Rollback = re-point alias (seconds)</li>
+    </ul>
+  </div>
+
+  <div class="cheat-block">
+    <h4>Stakeholder one-liners</h4>
+    <ul>
+      <li><b>DS</b>: velocity</li>
+      <li><b>MLE</b>: reproducibility</li>
+      <li><b>AI Eng</b>: trace + eval</li>
+      <li><b>PM</b>: time-to-value</li>
+      <li><b>SRE</b>: SLOs + blast radius</li>
+      <li><b>Sec</b>: secrets, PII, audit</li>
+      <li><b>Finance</b>: per-team attribution</li>
+      <li><b>Legal</b>: approved providers, explainability</li>
+    </ul>
+  </div>
+
+  <div class="cheat-block ai">
+    <h4>End-to-end agent call</h4>
+    <ul>
+      <li>POST /invocations &rarr; ChatModel sig validate</li>
+      <li>Open root <code>AGENT</code> span</li>
+      <li>SDK calls auto-traced as <code>LLM</code> spans</li>
+      <li>Tool calls &rarr; <code>TOOL</code> spans</li>
+      <li>Root ends &rarr; TraceManager finalises &rarr; exporter ships</li>
+      <li>Trace lands in same experiment as the registered agent</li>
+    </ul>
+  </div>
+
+  <div class="cheat-block">
+    <h4>Build vs buy &mdash; quick takes</h4>
+    <ul>
+      <li><b>W&amp;B</b>: small team, hosted, polished UI</li>
+      <li><b>SageMaker / Vertex</b>: all-in on one cloud</li>
+      <li><b>LangSmith</b>: LLM-only, no classical ML</li>
+      <li><b>BentoML / KServe</b>: outgrown pyfunc scoring server</li>
+      <li><b>DVC</b>: code-first reproducibility, no tracking server</li>
+      <li><b>MLflow</b>: multi-cloud, full surface, self-host friendly</li>
+    </ul>
+  </div>
+
+  <div class="cheat-block">
+    <h4>Interview cheat tells</h4>
+    <ul>
+      <li>"It depends on X" &mdash; not just "it depends"</li>
+      <li>Always name the tradeoff dimension</li>
+      <li>Mention failure modes, not just happy path</li>
+      <li>Defend a choice under "but what if&hellip;"</li>
+      <li>Reference primitives by name (<code>AbstractStore</code>, <code>ChatModel</code>)</li>
+    </ul>
+  </div>
+
+</div>
+
+<footer class="page-footer">
+  <p>Deeper context: <a href="architect/index.html">Architect Guide</a> &middot; <a href="user-guide.html">User Guide</a> &middot; <a href="interview-prep.html">Interview Prep</a></p>
+</footer>
+
+</main>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Packaging &amp; Registry &mdash; Architect Guide</title>
+<meta name="description" content="MLmodel format, flavors, the universal pyfunc contract, signatures, and the model registry — including stages vs aliases.">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+
+<div class="shell">
+
+<aside class="sidebar">
+  <h1>Architect&nbsp;Guide</h1>
+  <nav>
+    <a href="../index.html">&larr; Overview</a>
+    <div class="section-label">Chapters</div>
+    <a href="index.html">0. Architect overview</a>
+    <a href="storage.html">1. Storage layer</a>
+    <a href="packaging.html" class="active">2. Packaging &amp; registry</a>
+    <a href="serving.html">3. Projects &amp; serving</a>
+    <a href="tracing.html">4. Tracing &amp; auto-tracing</a>
+    <a href="agents.html">5. Agents, gateway, eval</a>
+    <a href="operations.html">6. Operations &amp; build-vs-buy</a>
+    <div class="section-label">Other</div>
+    <a href="../cheatsheet.html">Cheat sheet</a>
+    <a href="../user-guide.html">User Guide</a>
+    <a href="../interview-prep.html">Interview Prep</a>
+  </nav>
+</aside>
+
+<main>
+
+<p class="crumbs"><a href="../index.html">Overview</a> &rsaquo; <a href="index.html">Architect Guide</a> &rsaquo; Packaging &amp; registry</p>
+
+<h1>Chapter 2 &mdash; Packaging &amp; registry</h1>
+<p class="subtitle">How a trained sklearn estimator and a fine-tuned transformer end up loadable through the same one-line API. The MLmodel format, the flavor pattern, and the registry that pins versions to mutable named pointers.</p>
+
+<h2 id="mlmodel">The MLmodel file</h2>
+<p>Every saved model directory contains a YAML manifest:</p>
+<pre><code>artifact_path: model
+flavors:
+  python_function:
+    loader_module: mlflow.sklearn
+    model_path: model.pkl
+    env: conda.yaml
+  sklearn:
+    sklearn_version: 1.4.0
+    serialization_format: cloudpickle
+signature:
+  inputs: '[{"name": "age", "type": "long"}, ...]'
+  outputs: '[{"type": "double"}]'
+run_id: 9f...</code></pre>
+
+<p><code>flavors</code> is a dict of overlapping representations of the same model. Almost every native flavor <em>also</em> registers a <code>python_function</code> flavor &mdash; that is the universal entry point for serving and tools.</p>
+
+<h2 id="flavors">Flavors &mdash; the framework adapter contract</h2>
+<p>A <em>flavor</em> is a Python module that knows how to serialize and deserialize one framework. Every flavor exports the same trio:</p>
+<pre><code>def save_model(model, path, signature=None, input_example=None, ...): ...
+def log_model(model, artifact_path, ...) -&gt; ModelInfo: ...
+def load_model(model_uri, ...): ...</code></pre>
+
+<div class="diagram">
+  <svg viewBox="0 0 800 380" role="img" aria-label="MLmodel and flavors universal contract">
+    <defs>
+      <marker id="arrP" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6b7280"/>
+      </marker>
+    </defs>
+
+    <!-- Top row: framework-native models -->
+    <rect class="box" x="20"  y="20" width="160" height="40" rx="6"/>
+    <text class="title" x="100" y="46" text-anchor="middle">sklearn estimator</text>
+
+    <rect class="box" x="200" y="20" width="160" height="40" rx="6"/>
+    <text class="title" x="280" y="46" text-anchor="middle">PyTorch module</text>
+
+    <rect class="box" x="380" y="20" width="180" height="40" rx="6"/>
+    <text class="title" x="470" y="46" text-anchor="middle">transformers pipeline</text>
+
+    <rect class="box ai" x="580" y="20" width="200" height="40" rx="6"/>
+    <text class="title" x="680" y="46" text-anchor="middle">ChatModel agent</text>
+
+    <!-- Arrows top to MLmodel -->
+    <path class="arrow" d="M 100 60 L 280 130" marker-end="url(#arrP)"/>
+    <path class="arrow" d="M 280 60 L 360 130" marker-end="url(#arrP)"/>
+    <path class="arrow" d="M 470 60 L 440 130" marker-end="url(#arrP)"/>
+    <path class="arrow" d="M 680 60 L 520 130" marker-end="url(#arrP)"/>
+
+    <text class="small" x="400" y="100" text-anchor="middle"><tspan font-family="var(--font-mono)">flavor.save_model(...)</tspan></text>
+
+    <!-- Center: MLmodel manifest -->
+    <rect class="box hl" x="240" y="135" width="320" height="120" rx="6"/>
+    <text class="title" x="400" y="158" text-anchor="middle">MLmodel (YAML manifest + weights)</text>
+    <text class="small" x="400" y="178" text-anchor="middle">flavors:</text>
+    <text class="small" x="400" y="194" text-anchor="middle">&nbsp;&nbsp;python_function: { loader_module, model_path, env }</text>
+    <text class="small" x="400" y="208" text-anchor="middle">&nbsp;&nbsp;&lt;native&gt;: { framework version, serialization }</text>
+    <text class="small" x="400" y="225" text-anchor="middle">signature: { inputs, outputs, params }</text>
+    <text class="small" x="400" y="240" text-anchor="middle">input_example, run_id, requirements</text>
+
+    <!-- Arrow MLmodel -> pyfunc.load -->
+    <path class="arrow" d="M 400 255 L 400 295" marker-end="url(#arrP)"/>
+    <text class="small" x="420" y="280" text-anchor="start">routed by python_function flavor</text>
+
+    <!-- Bottom: universal pyfunc -->
+    <rect class="box good" x="180" y="295" width="440" height="60" rx="6"/>
+    <text class="title" x="400" y="320" text-anchor="middle">mlflow.pyfunc.load_model(uri).predict(x)</text>
+    <text class="small" x="400" y="340" text-anchor="middle">universal callable contract &mdash; signature validated at scoring time</text>
+  </svg>
+  <div class="caption">Every framework's model collapses through the MLmodel manifest into one universal callable. Tools downstream (serving, eval, deploy) only know <code>pyfunc</code>.</div>
+</div>
+
+<h3>Native flavors in this repo (28+)</h3>
+<ul>
+  <li><strong>Classical ML:</strong> <code>sklearn</code>, <code>xgboost</code>, <code>lightgbm</code>, <code>catboost</code>, <code>prophet</code>, <code>statsmodels</code>, <code>spacy</code>, <code>mleap</code>, <code>onnx</code>, <code>paddle</code>, <code>h2o</code>, <code>pmdarima</code>, <code>fastai</code>, <code>diviner</code>, <code>shap</code></li>
+  <li><strong>Deep learning:</strong> <code>pytorch</code>, <code>tensorflow</code>, <code>keras</code></li>
+  <li><strong>Spark:</strong> <code>spark</code>, <code>pyspark.ml</code></li>
+  <li><strong>GenAI:</strong> <code>transformers</code>, <code>langchain</code>, <code>llama_index</code>, <code>dspy</code>, <code>openai</code>, <code>bedrock</code>, <code>anthropic</code>, <code>gemini</code>, <code>groq</code>, <code>crewai</code>, <code>autogen</code>, <code>sentence_transformers</code>, <code>litellm</code>, <code>promptflow</code></li>
+  <li><strong>Universal:</strong> <code>pyfunc</code></li>
+</ul>
+
+<h2 id="signatures">Signatures and schemas</h2>
+<p><code>mlflow/models/signature.py</code> defines <code>ModelSignature</code> (input + output + params schemas) using <code>Schema</code>, <code>ColSpec</code>, and <code>ParamSchema</code> from <code>mlflow/types/schema.py</code>. Signatures are inferred from <code>input_example</code> whenever possible. They are enforced at serving time by the scoring server, which is what makes pyfunc safe to expose over HTTP.</p>
+
+<div class="callout">
+  <div class="label">Why always pass a signature</div>
+  <p>Without one, malformed payloads either silently produce wrong outputs or crash inside the model — neither is debuggable. With one, the scoring server returns a 422 with a precise error <em>before</em> the model is invoked. It's also what enables the UI's "predict" button and the lineage tools.</p>
+</div>
+
+<div class="roundtable">
+  <div class="topic">Roundtable &mdash; Why YAML, why pickle, why pyfunc?</div>
+  <div class="msg arch">
+    <div class="who"><span class="avatar">A</span> Architect</div>
+    <div class="body">YAML for <code>MLmodel</code> because humans read it during incidents. The whole file fits on one screen; you can grep it in S3. JSON would have worked, but YAML's comments and multi-line strings ergonomics matter when the file is auditable surface.</div>
+  </div>
+  <div class="msg sec">
+    <div class="who"><span class="avatar">X</span> Security</div>
+    <div class="body">Pickle is a known footgun — it executes code on load. We accept it because it's how Python ML serialization works in practice. The mitigation is that a registered model is only loadable from a <em>trusted artifact location</em> — a deployment policy, not a code-level guarantee.</div>
+  </div>
+  <div class="msg mle">
+    <div class="who"><span class="avatar">M</span> ML&nbsp;Engineer</div>
+    <div class="body">For the compliance-strict crowd: ONNX or SavedModel as the primary serialization, pickle as the fallback for stuff that doesn't graph-export. The flavor lets us record both — and on load, prefer the safe one.</div>
+  </div>
+  <div class="msg arch">
+    <div class="who"><span class="avatar">A</span> Architect</div>
+    <div class="body"><code>pyfunc</code> is the universal flavor because it's the smallest contract: a class with <code>predict(context, model_input)</code>. Every native flavor also registers a <code>python_function</code> entry pointing at its loader. Tools (serving, eval, deploy) only need to know pyfunc — they don't care if the underlying thing is sklearn or PyTorch or Anthropic.</div>
+  </div>
+</div>
+
+<h2 id="registry">The Model Registry</h2>
+<p>Same store pattern as tracking, different domain. <code>RegisteredModel</code> holds a name and tags; <code>ModelVersion</code> is an immutable snapshot pointing at a tracked model artifact, identified by an auto-incrementing integer per registered model.</p>
+
+<h3 id="aliases">Stages vs aliases &mdash; the migration</h3>
+<table>
+  <thead><tr><th></th><th>Stages (legacy)</th><th>Aliases (new)</th></tr></thead>
+  <tbody>
+    <tr><td>Cardinality</td><td>Fixed enum: <code>None</code>, <code>Staging</code>, <code>Production</code>, <code>Archived</code></td><td>Arbitrary: <code>champion</code>, <code>challenger</code>, <code>shadow</code>, <code>eu-prod</code>, ...</td></tr>
+    <tr><td>Mutability</td><td>One stage per version, one version per stage</td><td>Many aliases per version, alias points at one version</td></tr>
+    <tr><td>Decoupled from lifecycle?</td><td>No &mdash; implies promotion ladder</td><td>Yes &mdash; semantics are yours</td></tr>
+    <tr><td>Recommendation</td><td>Avoid in new workflows</td><td>Default for everything new</td></tr>
+  </tbody>
+</table>
+
+<div class="diagram">
+  <svg viewBox="0 0 800 360" role="img" aria-label="Registry alias mechanics">
+    <defs>
+      <marker id="arrR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6b7280"/>
+      </marker>
+      <marker id="arrR2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" fill="#1a7f37"/>
+      </marker>
+    </defs>
+
+    <!-- Title row -->
+    <text class="title" x="400" y="30" text-anchor="middle">Registered model: "churn-classifier"</text>
+
+    <!-- Versions row -->
+    <rect class="box ml" x="80"  y="60" width="120" height="60" rx="6"/>
+    <text class="title" x="140" y="86" text-anchor="middle">v1</text>
+    <text class="small" x="140" y="103" text-anchor="middle">2026-04-12 &middot; archived</text>
+
+    <rect class="box ml" x="220" y="60" width="120" height="60" rx="6"/>
+    <text class="title" x="280" y="86" text-anchor="middle">v2</text>
+    <text class="small" x="280" y="103" text-anchor="middle">2026-04-22</text>
+
+    <rect class="box ml" x="360" y="60" width="120" height="60" rx="6"/>
+    <text class="title" x="420" y="86" text-anchor="middle">v3</text>
+    <text class="small" x="420" y="103" text-anchor="middle">2026-04-30</text>
+
+    <rect class="box ml" x="500" y="60" width="120" height="60" rx="6"/>
+    <text class="title" x="560" y="86" text-anchor="middle">v4</text>
+    <text class="small" x="560" y="103" text-anchor="middle">2026-05-04</text>
+
+    <rect class="box" x="640" y="60" width="120" height="60" rx="6" stroke-dasharray="5,4"/>
+    <text class="small" x="700" y="90" text-anchor="middle">v5</text>
+    <text class="small" x="700" y="105" text-anchor="middle">in training&hellip;</text>
+
+    <!-- Aliases row -->
+    <text class="title" x="400" y="180" text-anchor="middle">Aliases (mutable named pointers)</text>
+
+    <rect class="box hl" x="140" y="200" width="160" height="50" rx="6"/>
+    <text class="title" x="220" y="225" text-anchor="middle">shadow</text>
+    <text class="small" x="220" y="241" text-anchor="middle">self-serve write</text>
+
+    <rect class="box hl" x="320" y="200" width="160" height="50" rx="6"/>
+    <text class="title" x="400" y="225" text-anchor="middle">champion</text>
+    <text class="small" x="400" y="241" text-anchor="middle">on-call sign-off</text>
+
+    <rect class="box hl" x="500" y="200" width="160" height="50" rx="6"/>
+    <text class="title" x="580" y="225" text-anchor="middle">challenger</text>
+    <text class="small" x="580" y="241" text-anchor="middle">team lead approval</text>
+
+    <!-- alias arrows -->
+    <path class="arrow" d="M 220 200 L 280 120" marker-end="url(#arrR)"/>
+    <path class="arrow" d="M 400 200 L 420 120" marker-end="url(#arrR)"/>
+    <path class="arrow" d="M 580 200 L 560 120" marker-end="url(#arrR)"/>
+
+    <!-- Promotion -->
+    <rect class="box good" x="120" y="290" width="560" height="50" rx="6"/>
+    <text class="title" x="400" y="312" text-anchor="middle">Promotion = re-point alias (no bytes copied)</text>
+    <text class="small" x="400" y="329" text-anchor="middle"><tspan font-family="var(--font-mono)">set_alias("champion", v=4)</tspan> &mdash; rollback is the same call with the previous version</text>
+  </svg>
+  <div class="caption">Aliases are pointers; promotion is a metadata flip. Code consumers always read <code>models:/churn-classifier@champion</code> — never a version number.</div>
+</div>
+
+<div class="roundtable">
+  <div class="topic">Roundtable &mdash; Why aliases beat stages</div>
+  <div class="msg pm">
+    <div class="who"><span class="avatar">P</span> PM</div>
+    <div class="body">Stages assumed everyone wanted the same lifecycle: dev &rarr; staging &rarr; prod. We had teams running A/B with three live versions, regional rollouts, dark launches — none of that maps to a four-state ladder.</div>
+  </div>
+  <div class="msg arch">
+    <div class="who"><span class="avatar">A</span> Architect</div>
+    <div class="body">Aliases are pointers; stages were states. Pointers compose: <code>models:/churn@champion</code> reads cleanly in code, in dashboards, and in Helm values. We can also promote by re-pointing without copying bytes.</div>
+  </div>
+  <div class="msg mle">
+    <div class="who"><span class="avatar">M</span> ML&nbsp;Engineer</div>
+    <div class="body">The migration headache is real though: every Airflow DAG and every <code>models:/X/Production</code> URI needs to switch. We deprecate stages but keep them queryable indefinitely &mdash; Hyrum's Law applies.</div>
+  </div>
+  <div class="msg sec">
+    <div class="who"><span class="avatar">X</span> Security</div>
+    <div class="body">Aliases need RBAC. "Anyone who can update <code>champion</code> can deploy to prod" is a real privilege escalation if you're not careful. Lock down alias write per environment.</div>
+  </div>
+</div>
+
+<h3>What to put in version description &amp; tags</h3>
+<ul>
+  <li>Description: the <em>why</em> &mdash; "rolled in zip-code one-hot, fixed leak from <code>last_login</code>".</li>
+  <li>Tags: <code>data_version</code>, <code>git_sha</code>, <code>training_run_id</code>, <code>approved_by</code>, <code>compliance_review_id</code>.</li>
+</ul>
+
+<footer class="page-footer">
+  <p>Continue to <a href="serving.html">Chapter 3: Projects &amp; serving &rarr;</a> &middot; back to <a href="index.html">Architect overview</a></p>
+</footer>
+
+</main>
+</div>
+
+</body>
+</html>
